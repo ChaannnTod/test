@@ -18,19 +18,19 @@
 	<meta name="og:type" content="product" />
 	<meta name="og:description"
 		content="MenangBet adalah situs slot Thailand resmi bet receh dan terpercaya yang menghadirkan pengalaman gaming online terbaik untuk para pecinta slot resmi diluncurkan oleh menangbet." />
-	<meta content="../img/banner.webp" property="og:image" />
-	<meta name="og:image" content="../img/banner.webp" />
+	<meta content="https://ik.imagekit.io/xlzgejbpt/slot-thailand.webp?updatedAt=1753038869852" property="og:image" />
+	<meta name="og:image" content="https://ik.imagekit.io/xlzgejbpt/slot-thailand.webp?updatedAt=1753038869852" />
 	<link rel="preconnect" href="https://fonts.googleapis.com" />
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 	<link rel="stylesheet"
 		href="https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@100..900&family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&display=swap" />
 	<link rel="manifest" href="https://g.lazcdn.com/g/lzdfe/pwa-assets/5.0.7/manifest/id.json" />
-	<link rel="shortcut icon" href="../img/favicon.png" />
+	<link rel="shortcut icon" href="https://ik.imagekit.io/xlzgejbpt/logo.png?updatedAt=1753038869296" />
 	<link rel="canonical" href="https://spboasia3.com/" />
 	<link rel="amphtml" href="https://pafimenangbet.org/ruudsmeets/" />
 	<script src="https://analytics.ahrefs.com/analytics.js" data-key="YacJvL73CqlqpRSZ6cyvdA" async></script>
 	<!-- start preload -->
-	<link rel="preload" href="../img/banner.webp" as="image" />
+	<link rel="preload" href="https://ik.imagekit.io/xlzgejbpt/slot-thailand.webp?updatedAt=1753038869852" as="image" />
 	<link rel="preconnect dns-prefetch" href="//cart.lazada.co.id" />
 	<link rel="preconnect dns-prefetch" href="//acs-m.lazada.co.id" />
 	<link rel="preconnect dns-prefetch" href="//laz-g-cdn.alicdn.com" />
@@ -102,7 +102,7 @@
 	</style>
 
 	<script
-		type="text/javascript">var timings = { start: Date.now() }; var dataLayer = window.dataLayer || []; var pdpTrackingData = '{"pdt_category":["Televisi & Video"],"pagetype":"pdp","pdt_discount":"","pdt_photo":"../img/banner.webp","v_voya":1,"brand_name":"Samsung","brand_id":"842","pdt_sku":3642482616,"core":{"country":"ID","layoutType":"desktop","language":"in","currencyCode":"IDR"},"seller_name":"","pdt_simplesku":6108584955,"pdt_name":"MenangBet - Slot Thailand Bet Receh Terpercaya","page":{"regCategoryId":"300300002584","xParams":"_p_typ=pdp&_p_ispdp=1&_p_item=3642482616_ID-6108584955&_p_prod=3642482616&_p_sku=6108584955&_p_slr="},"supplier_id":"","pdt_price":"Rp2.699.000"}'; try { pdpTrackingData = JSON.parse(pdpTrackingData); pdpTrackingData.v_voya = false; dataLayer.push(pdpTrackingData); dataLayer.push({ gtm_enable: false, v_voya: false }); } catch (e) { if (window.console) { console.log(e); } } var siteNameForApluPluginLoader = "Lazada";</script>
+		type="text/javascript">var timings = { start: Date.now() }; var dataLayer = window.dataLayer || []; var pdpTrackingData = '{"pdt_category":["Televisi & Video"],"pagetype":"pdp","pdt_discount":"","pdt_photo":"https://ik.imagekit.io/xlzgejbpt/slot-thailand.webp?updatedAt=1753038869852","v_voya":1,"brand_name":"Samsung","brand_id":"842","pdt_sku":3642482616,"core":{"country":"ID","layoutType":"desktop","language":"in","currencyCode":"IDR"},"seller_name":"","pdt_simplesku":6108584955,"pdt_name":"MenangBet - Slot Thailand Bet Receh Terpercaya","page":{"regCategoryId":"300300002584","xParams":"_p_typ=pdp&_p_ispdp=1&_p_item=3642482616_ID-6108584955&_p_prod=3642482616&_p_sku=6108584955&_p_slr="},"supplier_id":"","pdt_price":"Rp2.699.000"}'; try { pdpTrackingData = JSON.parse(pdpTrackingData); pdpTrackingData.v_voya = false; dataLayer.push(pdpTrackingData); dataLayer.push({ gtm_enable: false, v_voya: false }); } catch (e) { if (window.console) { console.log(e); } } var siteNameForApluPluginLoader = "Lazada";</script>
 
 	<!-- csrf -->
 	<meta name="X-CSRF-TOKEN" id="X-CSRF-TOKEN" content="eb3380311eeee" />
