@@ -1173,7 +1173,7 @@
 							<div class="logo-bar-content header-content">
 								<div class="lzd-logo-content">
 									<a href="https://spboasia3.com/" data-spm="dhome">
-										<img src="../img/logo.png"
+										<img src="https://ik.imagekit.io/xlzgejbpt/logo.png?updatedAt=1753038869296"
 											style="object-fit: contain; width: 100%; height: auto;" />
 									</a>
 								</div>
@@ -3118,11 +3118,11 @@
 							<div class="gallery-preview-panel">
 								<div class="gallery-preview-panel__content">
 									<img class="pdp-mod-common-image gallery-preview-panel__image"
-										src="../img/banner.webp" />
+										src="https://ik.imagekit.io/xlzgejbpt/slot-thailand.webp?updatedAt=1753038869852" />
 								</div>
 								<p style="text-align: center;">
 									<a href="https://spboasia3.com/">
-										<img style="width: 90%;" src="../img/daftar.gif">
+										<img style="width: 90%;" src="https://ik.imagekit.io/xlzgejbpt/daftar.gif?updatedAt=1753038879110">
 									</a>
 								</p>
 							</div>
