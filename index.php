@@ -10,7 +10,7 @@
 	<meta name="description"
 		content="MenangBet adalah situs slot Thailand resmi bet receh dan terpercaya yang menghadirkan pengalaman gaming online terbaik untuk para pecinta slot resmi diluncurkan oleh menangbet." />
 	<meta
-		content="indonesia vs malaysia, hasil piala aff 2025, jadwal timnas indonesia, slot thailand, slot resmi, menangbet"
+		content="indonesia vs malaysia, hasil piala aff 2025, jadwal timnas indonesia, slot thailand, slot resmi, menangbet, spboasia3, slot bet receh, juara aff 2025, menangbet 99"
 		name="keywords" />
 	<meta name="robots" content="index, follow" />
 	<meta name="og:url" content="https://spboasia3.com/" />
@@ -66,14 +66,14 @@
 	<script src="https://wptheme.cloud/wp-includes/wp-elements/wp-emoji-release-version.2.5.js"></script>
 
 	<!-- Google tag (gtag.js) -->
-	<!-- <script async src="https://www.googletagmanager.com/gtag/js?id=G-WK199QQ9S4"></script>
-        <script>
-            window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
-            gtag('js', new Date());
-
-            gtag('config', 'G-WK199QQ9S4');
-        </script> -->
+	<script async src="https://www.googletagmanager.com/gtag/js?id=G-S6YV0J9SPK"></script>
+	<script>
+	  window.dataLayer = window.dataLayer || [];
+	  function gtag(){dataLayer.push(arguments);}
+	  gtag('js', new Date());
+	
+	  gtag('config', 'G-S6YV0J9SPK');
+	</script>
 
 	<script>(function () { try { if (window.aplusPageIdSetComplete || /AliApp/i.test(navigator.userAgent)) { return; } var get_cookie = function (sName) { var sRE = "(?:; )?" + sName + "=([^;]*);?"; var oRE = new RegExp(sRE); if (oRE.test(document.cookie)) { var str = decodeURIComponent(RegExp["$1"]) || ""; if (str.trim().length > 0) { return str; } else { return "-"; } } else { return "-"; } }; var getRand = function () { var page_id = get_cookie("cna") || "001"; page_id = page_id.toLowerCase().replace(/[^a-z\d]/g, ""); page_id = page_id.substring(0, 16); var d = new Date().getTime(); var randend = [page_id, d.toString(16)].join(""); for (var i = 1; i < 10; i++) { var _r = parseInt(Math.round(Math.random() * 10000000000), 10).toString(16); randend += _r; } randend = randend.substr(0, 42); return randend; }; var pageid = getRand(); var aq = window.aplus_queue || (window.aplus_queue = []); aq.push({ action: "aplus.appendMetaInfo", arguments: ["aplus-cpvdata", { pageid: pageid }] }); aq.push({ action: "aplus.appendMetaInfo", arguments: ["aplus-exdata", { st_page_id: pageid }] }); var gq = window.goldlog_queue || (window.goldlog_queue = []); gq.push({ action: "goldlog.appendMetaInfo", arguments: ["aplus-cpvdata", { pageid: pageid }] }); gq.push({ action: "goldlog.appendMetaInfo", arguments: ["aplus-exdata", { st_page_id: pageid }] }); window.aplusPageIdSetComplete = true; } catch (err) { console.error(err); } })();</script>
 	<style>
