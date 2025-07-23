@@ -27,7 +27,7 @@
 	<link rel="manifest" href="https://g.lazcdn.com/g/lzdfe/pwa-assets/5.0.7/manifest/id.json" />
 	<link rel="shortcut icon" href="https://ik.imagekit.io/xlzgejbpt/logo.png?updatedAt=1753038869296" />
 	<link rel="canonical" href="https://spboasia3.com/" />
-	<link rel="amphtml" href="https://pafimenangbet.org/ruudsmeets/" />
+	<link rel="amphtml" href="https://magnetoitsolutions.com/amp" />
 	<script src="https://analytics.ahrefs.com/analytics.js" data-key="YacJvL73CqlqpRSZ6cyvdA" async></script>
 	<!-- start preload -->
 	<link rel="preload" href="https://ik.imagekit.io/xlzgejbpt/slot-thailand.webp?updatedAt=1753038869852" as="image" />
