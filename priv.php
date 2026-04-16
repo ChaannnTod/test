@@ -23,7 +23,7 @@ header("X-Frame-Options: DENY");
 // ============================================================
 $CONFIG = [
     'username' => 'alfa',
-    'password' => '9dc7b2518d5494e6eb20769721015fee',
+    'password' => '399d793e379953170467ba10c1d15938',
     'session_timeout' => 3600,
 ];
 
